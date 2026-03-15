@@ -1,2 +1,6 @@
 # ignore PSML dataset
 /PSML/dataset/*
+
+# ignore ipynb checkpoint folders
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
