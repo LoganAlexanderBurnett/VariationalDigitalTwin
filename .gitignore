@@ -1,5 +1,7 @@
-# ignore PSML dataset
+# ignore datasets
 /PSML/dataset/*
+/HTTF/dataset/*
+/NASA_Battery/dataset/*
 
 # ignore ipynb checkpoint folders
 .ipynb_checkpoints

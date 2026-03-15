@@ -1,0 +1,513 @@
+import random
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+import time
+from torchinfo import summary
+import json
+import os
+import argparse
+from torch.nn import Parameter
+from joblib import Parallel, delayed
+
+def set_random_seed(seed_value=42):
+    # Python random seed
+    random.seed(seed_value)
+    
+    # Numpy random seed
+    np.random.seed(seed_value)
+    
+    # PyTorch seed
+    torch.manual_seed(seed_value)
+    
+    # If using CUDA (GPU)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed_value)
+        torch.cuda.manual_seed_all(seed_value)  # if using multi-GPU
+        torch.backends.cudnn.deterministic = True  # For reproducibility
+        torch.backends.cudnn.benchmark = False  # Disable auto-optimization for determinism
+
+set_random_seed()
+
+# parse command-line
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--data-dir", "-d",
+    required=True,
+    help="Path to a shrink_train_## folder containing train.csv, valid.csv, test.csv"
+)
+args = parser.parse_args()
+
+# now change into that directory
+os.chdir(args.data_dir)
+
+# Check for GPU
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+# Load data
+train = pd.read_csv('train.csv')
+test = pd.read_csv('test.csv')
+valid = pd.read_csv('valid.csv')
+
+test_length = len(test)
+
+# Function to find rows with NaN values in a pandas DataFrame
+def check_nans_in_dataframe(df, column_name, name):
+    nan_rows = df[df[column_name].isna()]
+    if not nan_rows.empty:
+        print(f"Rows with NaN values in {name} dataset:")
+        print(nan_rows)
+    else:
+        print(f"No NaN values in {name} dataset.")
+
+# Check for NaN values in each dataset
+check_nans_in_dataframe(train, 'TS', 'Train')
+check_nans_in_dataframe(test, 'TS', 'Test')
+check_nans_in_dataframe(valid, 'TS', 'Validation')
+
+# Preprocess the data
+scaler = MinMaxScaler(feature_range=(0, 1))
+train_data = scaler.fit_transform(train)
+test_data = scaler.transform(test)
+valid_data = scaler.transform(valid)
+
+# Create sequences
+def create_sequences(data, lookback=10):
+    X, y = [], []
+    for i in range(lookback, len(data)):
+        X.append(data[i-lookback:i])  # Use the last 'lookback' time steps for prediction
+        y.append(data[i])  # The next time step is the target
+    return np.array(X), np.array(y)
+
+timesteps = 10
+Xtrain, Ytrain = create_sequences(train_data, lookback=timesteps)
+Xtest, Ytest = create_sequences(test_data, lookback=timesteps)
+Xvalid, Yvalid = create_sequences(valid_data, lookback=timesteps)
+
+# Convert to PyTorch tensors
+Xtrain_tensor = torch.tensor(Xtrain, dtype=torch.float32).to(device)
+Ytrain_tensor = torch.tensor(Ytrain, dtype=torch.float32).to(device)
+Xtest_tensor = torch.tensor(Xtest, dtype=torch.float32).to(device)
+Ytest_tensor = torch.tensor(Ytest, dtype=torch.float32).to(device)
+Xvalid_tensor = torch.tensor(Xvalid, dtype=torch.float32).to(device)
+Yvalid_tensor = torch.tensor(Yvalid, dtype=torch.float32).to(device)
+
+print(
+    f"""Xtrain, Ytrain: {Xtrain_tensor.shape}, {Ytrain_tensor.shape}
+Xtest,   Ytest: {Xtest_tensor.shape}, {Ytest_tensor.shape}
+Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
+)
+
+
+class BaseVariationalLayer_(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def kl_div(self, mu_q, sigma_q, mu_p, sigma_p):
+        kl = torch.log(sigma_p) - torch.log(sigma_q) \
+             + (sigma_q**2 + (mu_q - mu_p)**2) / (2 * sigma_p**2) \
+             - 0.5
+        return kl.mean()
+
+class LinearReparameterization(BaseVariationalLayer_):
+    def __init__(self,
+                 in_features,
+                 out_features,
+                 prior_mean=0.0,
+                 prior_variance=1.0,
+                 posterior_mu_init=0.0,
+                 posterior_rho_init=-3.0,
+                 bias=True):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.prior_mean      = prior_mean
+        self.prior_variance  = prior_variance
+        self.posterior_mu_init  = posterior_mu_init
+        self.posterior_rho_init = posterior_rho_init
+        self.bias_flag = bias
+
+        # posterior params
+        self.mu_weight  = Parameter(torch.Tensor(out_features, in_features))
+        self.rho_weight = Parameter(torch.Tensor(out_features, in_features))
+        self.register_buffer('prior_weight_mu',
+                             torch.full((out_features, in_features), prior_mean),
+                             persistent=False)
+        self.register_buffer('prior_weight_sigma',
+                             torch.full((out_features, in_features), prior_variance),
+                             persistent=False)
+
+        if bias:
+            self.mu_bias  = Parameter(torch.Tensor(out_features))
+            self.rho_bias = Parameter(torch.Tensor(out_features))
+            self.register_buffer('prior_bias_mu',
+                                 torch.full((out_features,), prior_mean),
+                                 persistent=False)
+            self.register_buffer('prior_bias_sigma',
+                                 torch.full((out_features,), prior_variance),
+                                 persistent=False)
+        else:
+            self.register_parameter('mu_bias', None)
+            self.register_parameter('rho_bias', None)
+            self.register_buffer('prior_bias_mu', None, persistent=False)
+            self.register_buffer('prior_bias_sigma', None, persistent=False)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.mu_weight.data.normal_(mean=self.posterior_mu_init, std=0.1)
+        self.rho_weight.data.normal_(mean=self.posterior_rho_init, std=0.1)
+        if self.bias_flag:
+            self.mu_bias.data.normal_(mean=self.posterior_mu_init, std=0.1)
+            self.rho_bias.data.normal_(mean=self.posterior_rho_init, std=0.1)
+
+    def forward(self, input):
+        sigma_w = torch.log1p(torch.exp(self.rho_weight))
+        eps_w   = torch.randn_like(self.mu_weight)
+        w = self.mu_weight + sigma_w * eps_w
+
+        if self.bias_flag:
+            sigma_b = torch.log1p(torch.exp(self.rho_bias))
+            eps_b   = torch.randn_like(self.mu_bias)
+            b = self.mu_bias + sigma_b * eps_b
+        else:
+            b = None
+
+        out = F.linear(input, w, b)
+
+        kl_w = self.kl_div(self.mu_weight, sigma_w,
+                           self.prior_weight_mu, self.prior_weight_sigma)
+        kl_b = torch.tensor(0.0, device=kl_w.device)
+        if self.bias_flag:
+            kl_b = self.kl_div(self.mu_bias, sigma_b,
+                               self.prior_bias_mu, self.prior_bias_sigma)
+        kl = kl_w + kl_b
+        return out, kl
+
+# Define the LSTM model
+class vLSTM(nn.Module):
+    def __init__(self, in_features, hidden_size1, hidden_size2, hidden_size3, out_features, prior_mean=0, prior_variance=1.0, posterior_rho_init=-3.0, bias=True):
+        super(vLSTM, self).__init__()
+
+        # Define multiple LSTM layers
+        self.lstm1 = nn.LSTM(in_features, hidden_size1, batch_first=True)
+
+        self.lstm2 = nn.LSTM(hidden_size1, hidden_size2, batch_first=True)
+
+        self.lstm3 = nn.LSTM(hidden_size2, hidden_size3, batch_first=True)
+        
+        self.fc = LinearReparameterization(
+            in_features=hidden_size3,
+            out_features=out_features,
+            prior_mean=prior_mean,
+            prior_variance=prior_variance,
+            posterior_rho_init=posterior_rho_init,
+            bias=bias
+        )
+
+    def forward(self, x, hidden_states=None):        
+        # LSTM1
+        out, _ = self.lstm1(x, hidden_states)
+    
+        # LSTM2
+        out, _ = self.lstm2(out, hidden_states)
+
+        # LSTM3
+        out, _ = self.lstm3(out, hidden_states)
+
+        # Get the output for the **last time step** only: [batch_size, hidden_size]
+        hidden_last_step = out[:, -1, :]  # Last time step
+
+        # Pass through the final linear layer
+        output, kl_fc = self.fc(hidden_last_step)
+        kl_total = kl_fc
+
+        # Return output and total KL divergence
+        return output, kl_total
+
+
+# Instantiate the model
+batch_size = 256
+learning_rate = 0.00018
+num_epochs = 50
+hidden1 = 48
+hidden2 = 64
+hidden3 = 32
+criterion = nn.MSELoss()
+
+model = vLSTM(in_features=2, hidden_size1=hidden1, hidden_size2=hidden2, hidden_size3=hidden3, out_features=2).to(device)
+for lstm in (model.lstm1, model.lstm2, model.lstm3):
+    lstm.flatten_parameters()
+
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+# Load data into datasets followed by dataloaders
+train_dataset = torch.utils.data.TensorDataset(Xtrain_tensor, Ytrain_tensor)
+valid_dataset = torch.utils.data.TensorDataset(Xvalid_tensor, Yvalid_tensor)
+test_dataset = torch.utils.data.TensorDataset(Xtest_tensor, Ytest_tensor)
+
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
+valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size)
+test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size)
+
+# Training process (with KL divergence handling)
+def train_model(model, train_loader, val_loader, num_epochs, reconstruction_loss_fn, optimizer, device=torch.device('cpu'), kl_schedule='linear'):
+    model.to(device)
+    
+    train_losses = []
+    val_losses = []
+
+    for epoch in range(num_epochs):
+        model.train()
+
+        if kl_schedule == 'linear':
+            kl_weight = epoch / num_epochs
+        elif kl_schedule == 'sigmoid_growth':
+            kl_weight = 0.05 / (1 + np.exp(-2 * (epoch - 0.7 * num_epochs))) + 0.0005 # max / (1 + e^[-rate * (epoch - frac_training_w/o_KL*num_epochs)]) + min
+        elif kl_schedule == 'sigmoid_decay':
+            kl_weight = 0.05 / (1 + np.exp(2 * (epoch - 0.15 * num_epochs))) + 0.0005
+        else: 
+            kl_weight = 1e-4
+        
+        running_train_loss = 0.0
+
+        for inputs, targets in train_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            optimizer.zero_grad()
+
+            # Forward pass
+            outputs, kl_loss = model(inputs)
+
+            # Compute the reconstruction loss
+            reconstruction_loss = reconstruction_loss_fn(outputs, targets)
+
+            # Total loss (reconstruction + KL divergence)
+            total_loss = reconstruction_loss + kl_weight * kl_loss
+
+            # Backward pass
+            total_loss.backward()
+            optimizer.step()
+
+            running_train_loss += total_loss.item()
+
+        avg_train_loss = running_train_loss / len(train_loader)
+        train_losses.append(avg_train_loss)
+
+        # Validation loop
+        model.eval()
+        running_val_loss = 0.0
+        with torch.no_grad():
+            for val_inputs, val_targets in val_loader:
+                val_inputs, val_targets = val_inputs.to(device), val_targets.to(device)
+                val_outputs, val_kl_loss = model(val_inputs)
+
+                val_reconstruction_loss = reconstruction_loss_fn(val_outputs, val_targets)
+                val_total_loss = val_reconstruction_loss + kl_weight * val_kl_loss
+                running_val_loss += val_total_loss.item()
+
+        avg_val_loss = running_val_loss / len(val_loader)
+        val_losses.append(avg_val_loss)
+
+        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, KL Weight: {kl_weight}')
+
+    return train_losses, val_losses
+
+start = time.time()
+
+# Train and validate the model
+train_losses, val_losses = train_model(model, train_loader, valid_loader, num_epochs=num_epochs, reconstruction_loss_fn=criterion, optimizer=optimizer, kl_schedule=None, device=device)
+
+end = time.time()
+train_time = end - start
+print(f"Training took {train_time}s")
+
+# Plot loss curve
+plt.figure(figsize=(10, 6))
+plt.plot(train_losses, label='Training Loss')
+plt.plot(val_losses, label='Validation Loss')
+plt.title(f"Loss Curve")
+plt.xlabel("Epochs")
+plt.ylabel("Loss (MSE)")
+plt.legend()
+plt.grid()
+plt.savefig("training.png", bbox_inches='tight')
+plt.close()
+
+
+# Function to make predictions multiple times to capture uncertainty
+def predict_with_uncertainty(
+    model,
+    test_loader,
+    n_samples=100,
+    scaler_y=None,
+    device=torch.device('cpu'),
+    alpha=0.05
+):
+    """
+    Runs MC sampling through `model` to estimate uncertainty,
+    but without extra-process overhead.
+
+    Returns:
+      mean_preds: (N, K) array of predictive means
+      true_vals:  (N, K) array of ground truths
+      lower:      (N, K) lower bound at alpha/2 (default 2.5%)
+      upper:      (N, K) upper bound at 1-alpha/2 (default 97.5%)
+    """
+    model.eval()
+    all_preds = []
+    all_trues = []
+
+    with torch.no_grad():
+        for inputs, targets in test_loader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+
+            # collect the true values
+            all_trues.append(targets.cpu().numpy())
+
+            # do n_samples forward passes _sequentially_
+            batch_preds = []
+            for _ in range(n_samples):
+                outs, _ = model(inputs)
+                batch_preds.append(outs.cpu().numpy())
+
+            # shape (n_samples, batch, K)
+            all_preds.append(np.stack(batch_preds, axis=0))
+
+    # concatenate across batches → (n_samples, total_N, K)
+    all_preds = np.concatenate(all_preds, axis=1)
+    true_vals = np.concatenate(all_trues, axis=0)  # (total_N, K)
+
+    # inverse scaling if needed
+    if scaler_y is not None:
+        true_vals = scaler_y.inverse_transform(true_vals)
+        all_preds = np.array(
+            [scaler_y.inverse_transform(p) for p in all_preds]
+        )
+
+    # now compute stats over the sample axis
+    mean_preds = np.mean(all_preds, axis=0)   # (total_N, K)
+    lower     = np.percentile(all_preds, 100 * (alpha/2),    axis=0)
+    upper     = np.percentile(all_preds, 100 * (1-alpha/2), axis=0)
+
+    return mean_preds, true_vals, lower, upper
+
+
+n_samples = 100
+
+# Timing
+start = time.time()
+
+# Predict on test data, sampling to obtain uncertainty estimation, plot for each output
+mean_predictions, true_values, lower_ci, upper_ci = predict_with_uncertainty(model, test_loader, n_samples=n_samples, scaler_y=scaler, device=device)
+
+end = time.time()
+cpu_time = end - start
+print(f"Prediction time: {cpu_time:.4f} seconds")
+
+Ypred = np.stack((mean_predictions, lower_ci, upper_ci), axis=2)
+
+# Save Ypred and Ytrue
+np.save("Ypred.npy", Ypred)
+np.save("Ytrue.npy", true_values)
+
+print("Saved Ypred.npy with shape:", Ypred.shape)
+print("Saved Ytrue.npy with shape:", true_values.shape)
+
+# Extract individual outputs for evaluation
+Ypred_mean_1, Ypred_mean_2 = mean_predictions[:, 0], mean_predictions[:, 1]
+Ypred_upper_1, Ypred_upper_2 = upper_ci[:, 0], upper_ci[:, 1]
+Ypred_lower_1, Ypred_lower_2 = lower_ci[:, 0], lower_ci[:, 1]
+Ytrue_1, Ytrue_2 = true_values[:, 0], true_values[:, 1]
+
+
+def plot_with_ci(y_true, y_pred_mean, y_pred_lower, y_pred_upper,
+                 ylabel, fname, test_length):
+    plt.figure(figsize=(16, 6))
+
+    # vertical lines every 5485 steps
+    for x_val in np.arange(5485, len(y_true), 5485):
+        plt.vlines(x=x_val, ymin=-100, ymax=1500,
+                   color='gray', linestyle='--', linewidth=0.5, alpha=0.5)
+
+    # actual and mean prediction
+    x = np.arange(len(y_true))
+    plt.plot(x, y_true, 'b', label="Actual")
+    plt.plot(x, y_pred_mean, 'r', linestyle='--', label="Mean Prediction")
+
+    # confidence interval band
+    plt.fill_between(x, y_pred_lower, y_pred_upper,
+                     color='r', alpha=0.2, label="95% CI")
+
+    plt.xlabel('Time Steps (30 seconds/step)')
+    plt.ylabel(ylabel)
+    plt.ylim(0, 1200)
+    plt.xlim(0, test_length)
+    plt.legend(loc='upper left')
+    plt.savefig(fname, bbox_inches='tight')
+    plt.close()
+
+
+plot_with_ci(
+    Ytrue_1,
+    Ypred_mean_1,
+    Ypred_lower_1,
+    Ypred_upper_1,
+    ylabel='Solid Temperature (°C)',
+    fname='testing_ts.png',
+    test_length=test_length
+)
+
+plot_with_ci(
+    Ytrue_2,
+    Ypred_mean_2,
+    Ypred_lower_2,
+    Ypred_upper_2,
+    ylabel='Fluid Temperature (°C)',
+    fname='testing_tf.png',
+    test_length=test_length
+)
+
+def calculate_metrics(y_true, y_pred):
+    r2    = r2_score(y_true, y_pred)
+    mae   = mean_absolute_error(y_true, y_pred)
+    mape  = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    rmse  = np.sqrt(mean_squared_error(y_true, y_pred))
+    rmspe = np.sqrt(np.mean(((y_true - y_pred) / y_true)**2)) * 100
+    return r2, mae, mape, rmse, rmspe
+
+metrics = {}
+for idx, (y_true, y_pred) in enumerate([
+        (Ytrue_1, Ypred_mean_1),
+        (Ytrue_2, Ypred_mean_2)],
+    start=1):
+    r2, mae, mape, rmse, rmspe = calculate_metrics(y_true, y_pred)
+
+    print(f"--- Metrics for output #{idx} ---")
+    print(f"R^2 Score: {r2}")
+    print(f"MAE:        {mae}")
+    print(f"MAPE:       {mape:.2f}%")
+    print(f"RMSE:       {rmse}")
+    print(f"RMSPE:      {rmspe:.2f}%\n")
+
+    metrics[f"output_{idx}"] = {
+        "r2":    float(r2),
+        "mae":   float(mae),
+        "mape":  float(mape),
+        "rmse":  float(rmse),
+        "rmspe": float(rmspe),
+        "train_time": float(train_time)
+    }
+
+with open("performance_metrics.json", "w") as fp:
+    json.dump(metrics, fp, indent=4)
+
+print("Saved all metrics to performance_metrics.json")
+
+
+
