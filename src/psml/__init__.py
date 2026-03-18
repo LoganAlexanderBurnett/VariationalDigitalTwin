@@ -8,7 +8,12 @@ from .models import (
     StandardGRUModel,
     StandardLSTMModel,
 )
-from .trainer import train_model
+from .trainer import (
+    train_deterministic,
+    train_deterministic_rolling,
+    train_model,
+    train_variational,
+)
 from .uncertainty import (
     calculate_and_display_metrics,
     plot_predictions,
@@ -28,6 +33,9 @@ __all__ = [
     "RollingStandardLSTMModel",
     "StandardGRUModel",
     "StandardLSTMModel",
+    "train_deterministic",
+    "train_deterministic_rolling",
     "train_model",
     "train_val_test_split",
+    "train_variational",
 ]

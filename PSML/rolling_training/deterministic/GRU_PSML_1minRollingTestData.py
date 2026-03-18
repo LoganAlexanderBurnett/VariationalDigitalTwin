@@ -12,6 +12,7 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
 from psml.models import RollingStandardGRUModel as StandardGRUModel
+from psml.trainer import train_deterministic_rolling
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
@@ -36,23 +37,6 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 3) Helpers
 # -----------------------------------------------------------------------------
-def train_gru(model, loader_train, epochs, loss_fn, optimizer, dev):
-    model.to(dev)
-    for ep in range(1, epochs+1):
-        model.train()
-        total_loss = 0.0
-        for xb, yb in loader_train:
-            xb, yb = xb.to(dev), yb.to(dev)
-            optimizer.zero_grad()
-            yp, _ = model(xb)
-            loss = loss_fn(yp, yb)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        avg_loss = total_loss / len(loader_train)
-        if ep % 10 == 0 or ep == 1:
-            print(f"  Epoch {ep}/{epochs} — Train Loss: {avg_loss:.4f}")
-
 def predict_standard_gru(model, loader, scaler_y, dev):
     model.eval()
     preds, trues = [], []
@@ -178,7 +162,7 @@ while test_end <= n_samples:
 
     # train
     print(f" Training on samples [{train_start}:{train_end}]")
-    train_gru(model, train_loader, epochs, loss_fn, optimizer, device)
+    train_deterministic_rolling(model, train_loader, optimizer, loss_fn, epochs, device=device)
 
     # test & store metrics
     print(f" Testing on samples [{test_start}:{test_end}]")

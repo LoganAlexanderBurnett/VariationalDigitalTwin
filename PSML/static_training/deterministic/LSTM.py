@@ -11,6 +11,7 @@
 
 from psml.data_handler import *
 from psml.models import StandardLSTMModel
+from psml.trainer import train_deterministic
 
 import torch
 import torch.nn as nn
@@ -125,52 +126,6 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
 
 # ### Instantiate and train LSTM model
 
-# Training function with validation
-def train_lstm(model, train_loader, val_loader, criterion, optimizer, num_epochs):
-    model.train()  # Set model to training mode
-    train_losses = []
-    val_losses = []
-
-    for epoch in range(num_epochs):
-        epoch_loss = 0.0
-        model.train()  # Ensure model is in training mode
-
-        for inputs, targets in train_loader:  # Training loop
-            # Move data to the appropriate device (CPU or GPU)
-            inputs, targets = inputs.to(device), targets.to(device)
-            
-            # Forward pass
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            
-            # Backward pass and optimization
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            # Accumulate loss for this batch
-            epoch_loss += loss.item()
-        
-        # Average training loss for the epoch
-        avg_train_loss = epoch_loss / len(train_loader)
-        train_losses.append(avg_train_loss)
-
-        # Validation step
-        model.eval()  # Set model to evaluation mode
-        val_loss = 0.0
-        with torch.no_grad():  # Disable gradient computation for validation
-            for val_inputs, val_targets in val_loader:
-                val_inputs, val_targets = val_inputs.to(device), val_targets.to(device)
-                val_outputs = model(val_inputs)
-                val_loss += criterion(val_outputs, val_targets).item()
-
-        avg_val_loss = val_loss / len(val_loader)
-        val_losses.append(avg_val_loss)
-
-        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
-    
-    return train_losses, val_losses
-
 # Hyperparameters from GridSearch
 input_size = 8  # Number of input features
 output_size = 2  # Number of outputs
@@ -198,7 +153,17 @@ optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 start = time.time()
 
 # Train the model and visualize losses
-train_losses, val_losses = train_lstm(model, train_loader, val_loader, criterion, optimizer, num_epochs)
+history = train_deterministic(
+    model=model,
+    train_loader=train_loader,
+    optimizer=optimizer,
+    loss_fn=criterion,
+    num_epochs=num_epochs,
+    device=device,
+    val_loader=val_loader,
+)
+train_losses = history["train_losses"]
+val_losses = history["val_losses"]
 
 end = time.time()
 train_time = end - start

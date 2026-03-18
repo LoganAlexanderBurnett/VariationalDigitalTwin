@@ -14,6 +14,7 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from psml.data_handler import feature_label_split, create_sequences
 from psml.linear_variational import LinearReparameterization
 from psml.models import GRUReparameterizationModel
+from psml.trainer import train_variational
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
@@ -38,61 +39,6 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 3) Helpers
 # -----------------------------------------------------------------------------
-def train_model(model, train_loader, num_epochs, reconstruction_loss_fn, optimizer, device=torch.device('cpu'), kl_schedule=None):
-    model.to(device)
-    
-    train_losses = []
-
-    for epoch in range(num_epochs):
-        model.train()
-
-        if kl_schedule == 'linear':
-            kl_weight = epoch / num_epochs
-        elif kl_schedule == 'sigmoid_growth':
-            kl_weight = 0.1 / (1 + np.exp(-2 * (epoch - 0.7 * num_epochs))) + 0.001 # max / (1 + e^[-rate * (epoch - frac_training_w/o_KL*num_epochs)]) + min
-        elif kl_schedule == 'sigmoid_decay':
-            kl_weight = 0.1 / (1 + np.exp(2 * (epoch - 0.15 * num_epochs))) + 0.001
-        else: 
-            kl_weight = 1e-4
-        
-        running_train_loss = 0.0
-        running_recon_loss = 0.0
-        running_kl_loss    = 0.0
-        
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            optimizer.zero_grad()
-
-            # Forward pass
-            outputs, kl_loss = model(inputs)
-
-            # Compute the reconstruction loss
-            reconstruction_loss = reconstruction_loss_fn(outputs, targets)
-
-            # Total loss (reconstruction + KL divergence)
-            total_loss = reconstruction_loss + kl_weight * kl_loss
-
-            # Backward pass
-            total_loss.backward()
-            optimizer.step()
-
-            # Accumulate
-            running_train_loss += total_loss.item()
-            running_recon_loss += reconstruction_loss.item()
-            running_kl_loss    += kl_loss.item()
-
-        # Compute per‐batch averages
-        n_batches = len(train_loader)
-        avg_recon = running_recon_loss / n_batches
-        avg_kl    = running_kl_loss    / n_batches
-        avg_train_loss = running_train_loss / n_batches
-        train_losses.append(avg_train_loss)
-
-        if (epoch+1) % 10 == 0:
-            print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.6f}, MSE Loss: {avg_recon:.6f},KL Loss: {avg_kl:.6f}')
-
-    return train_losses
-
 from joblib import Parallel, delayed
 
 import numpy as np
@@ -310,7 +256,7 @@ while test_end <= n_samples:
     # train (assumes your train_gru handles the KL term returned by the variational model)
     print(f" Training on samples [{train_start}:{train_end}]")
     start = time.time()
-    train_model(model, train_loader, epochs, loss_fn, optimizer, device)
+    train_variational(model, train_loader, optimizer, loss_fn, epochs, device=device, log_every=10, return_history=False)
     end = time.time()
     train_time = end-start
     training_time.append(train_time)

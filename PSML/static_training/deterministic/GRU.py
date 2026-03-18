@@ -11,6 +11,7 @@
 
 from psml.data_handler import *
 from psml.models import StandardGRUModel
+from psml.trainer import train_deterministic
 
 import torch
 import torch.nn as nn
@@ -125,65 +126,6 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
 
 # ### Instantiate and train GRU model
 
-# Training process (standard GRU model)
-def train_gru(model, train_loader, val_loader, num_epochs, loss_fn, optimizer, device=torch.device('cpu')):
-    model.to(device)
-
-    train_losses = []
-    val_losses = []
-
-    for epoch in range(num_epochs):
-        model.train()
-        running_train_loss = 0.0
-
-        # Training loop
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-
-            # Zero out the gradients from the optimizer
-            optimizer.zero_grad()
-
-            # Forward pass through the model
-            outputs = model(inputs)
-
-            # Compute the loss (no KL divergence in standard GRU model)
-            loss = loss_fn(outputs, targets)
-
-            # Backward pass to compute gradients
-            loss.backward()
-
-            # Optimizer step to update weights
-            optimizer.step()
-
-            running_train_loss += loss.item()
-
-        # Compute average training loss
-        avg_train_loss = running_train_loss / len(train_loader)
-        train_losses.append(avg_train_loss)
-
-        # Validation loop
-        model.eval()
-        running_val_loss = 0.0
-        with torch.no_grad():  # Disable gradient calculation for validation
-            for val_inputs, val_targets in val_loader:
-                val_inputs, val_targets = val_inputs.to(device), val_targets.to(device)
-
-                # Forward pass on validation data
-                val_outputs = model(val_inputs)
-
-                # Compute the validation loss
-                val_loss = loss_fn(val_outputs, val_targets)
-                running_val_loss += val_loss.item()
-
-        # Compute average validation loss
-        avg_val_loss = running_val_loss / len(val_loader)
-        val_losses.append(avg_val_loss)
-
-        # Print progress for each epoch
-        print(f'Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
-
-    return train_losses, val_losses
-
 # Hyperparameters from GridSearch
 num_layers = 1
 lr = 0.001
@@ -208,9 +150,18 @@ reconstruction_loss_fn = torch.nn.MSELoss()  # regression task
 start = time.time()
 
 # Train the model
-train_losses, val_losses = train_gru(
-    model, train_loader, val_loader, num_epochs=num_epochs, loss_fn=reconstruction_loss_fn, optimizer=optimizer, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+history = train_deterministic(
+    model=model,
+    train_loader=train_loader,
+    optimizer=optimizer,
+    loss_fn=reconstruction_loss_fn,
+    num_epochs=num_epochs,
+    device=device,
+    val_loader=val_loader,
 )
+train_losses = history["train_losses"]
+val_losses = history["val_losses"]
 
 end = time.time()
 train_time = end - start
