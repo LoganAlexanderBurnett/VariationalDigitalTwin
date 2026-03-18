@@ -11,7 +11,7 @@
 
 from psml.data_handler import *
 from psml.models import StandardLSTMModel
-from psml.predict import predict_deterministic
+from psml.predict import plot_predictions, predict_deterministic
 from psml.trainer import set_random_seed, train_deterministic
 
 import torch
@@ -188,19 +188,13 @@ test_actuals.shape
 
 labels = ['Solar Power', 'Wind Power']
 
-# Plot predictions vs actuals
-for output_index, label in zip(range(0,2), labels):
-    plt.figure(figsize=(16,6))
-    plt.xlim(0, 1300)
-    plt.plot(test_actuals[:, output_index], label='Actual', linestyle='-', color='blue')
-    plt.plot(test_predictions[:, output_index], label='Prediction', color='r', linestyle='--')
-    plt.xlabel('Time (10 minute intervals)')
-    plt.ylabel(label)
-    plt.title('LSTM Test Predictions vs. Actuals')
-    plt.legend()
-    plt.grid(True)
-
-plt.show()
+plot_predictions(
+    test_predictions,
+    test_actuals,
+    title='LSTM Test Predictions vs. Actuals',
+    labels=labels,
+    n_display=1300,
+)
 
 # # Calculate R2, MAE, RMSE
 
@@ -242,19 +236,13 @@ print("Test Actuals:", train_actuals)
 
 labels = ['Solar Power', 'Wind Power']
 
-# Plot predictions vs actuals
-for output_index, label in zip(range(0,2), labels):
-    plt.figure(figsize=(16,6))
-    plt.xlim(0, 1300)
-    plt.plot(train_actuals[:, output_index], label='Actual', linestyle='-', color='blue')
-    plt.plot(train_predictions[:, output_index], label='Prediction', color='r', linestyle='--')
-    plt.xlabel('Time (10 minute intervals)')
-    plt.ylabel(label)
-    plt.title('LSTM Train Predictions vs. Actuals')
-    plt.legend()
-    plt.grid(True)
-
-plt.show()
+plot_predictions(
+    train_predictions,
+    train_actuals,
+    title='LSTM Train Predictions vs. Actuals',
+    labels=labels,
+    n_display=1300,
+)
 
 # Number of outputs
 n_outputs = train_actuals.shape[1]

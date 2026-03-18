@@ -8,7 +8,12 @@ from .models import (
     StandardGRUModel,
     StandardLSTMModel,
 )
-from .predict import calculate_and_display_metrics, plot_predictions, predict_deterministic, predict_with_uncertainty
+from .predict import (
+    calculate_and_display_metrics,
+    plot_predictions,
+    predict_deterministic,
+    predict_with_uncertainty,
+)
 from .trainer import (
     set_random_seed,
     train_deterministic,
