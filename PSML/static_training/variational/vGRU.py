@@ -12,7 +12,7 @@
 
 from psml.data_handler import *
 from psml.trainer import *
-from psml.predict import *
+from psml.predict import calculate_and_display_metrics, plot_predictions, predict_with_uncertainty
 from psml.linear_variational import *
 from psml.models import GRUReparameterizationModel
 import torch

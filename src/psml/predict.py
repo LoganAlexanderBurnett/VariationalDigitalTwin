@@ -5,13 +5,71 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import torch
 
 
+_DEFAULT_PLOT_LABELS = ("Solar", "Wind")
+_DEFAULT_PLOT_COLORS = (
+    "orangered",
+    "dodgerblue",
+    "mediumseagreen",
+    "mediumpurple",
+    "goldenrod",
+    "slategray",
+)
+
+
 def _extract_predictions(model_output):
     if isinstance(model_output, tuple):
         return model_output[0]
     return model_output
 
 
-def predict_deterministic(model, data_loader, scaler_y=None, device=torch.device('cpu')):
+
+def _to_numpy_2d(values):
+    array = np.asarray(values)
+    if array.ndim == 1:
+        return array[:, None]
+    return array
+
+
+
+def _inverse_transform_outputs(values, scaler_y=None):
+    if scaler_y is None:
+        return values
+
+    values_2d = _to_numpy_2d(values)
+    transformed = scaler_y.inverse_transform(values_2d)
+
+    if np.asarray(values).ndim == 1:
+        return transformed[:, 0]
+    return transformed
+
+
+
+def _resolve_output_labels(n_outputs, labels=None):
+    if labels is None:
+        base_labels = list(_DEFAULT_PLOT_LABELS)
+    elif isinstance(labels, str):
+        base_labels = [labels]
+    else:
+        base_labels = list(labels)
+
+    if len(base_labels) < n_outputs:
+        base_labels.extend(
+            [f"Output {index + 1}" for index in range(len(base_labels), n_outputs)]
+        )
+
+    return base_labels[:n_outputs]
+
+
+
+def _resolve_output_colors(n_outputs):
+    return [
+        _DEFAULT_PLOT_COLORS[index % len(_DEFAULT_PLOT_COLORS)]
+        for index in range(n_outputs)
+    ]
+
+
+
+def predict_deterministic(model, data_loader, scaler_y=None, device=torch.device("cpu")):
     model.eval()
     all_predictions = []
     true_values = []
@@ -28,10 +86,11 @@ def predict_deterministic(model, data_loader, scaler_y=None, device=torch.device
     true_values = np.concatenate(true_values, axis=0)
 
     if scaler_y is not None:
-        true_values = scaler_y.inverse_transform(true_values)
-        all_predictions = scaler_y.inverse_transform(all_predictions)
+        true_values = _inverse_transform_outputs(true_values, scaler_y)
+        all_predictions = _inverse_transform_outputs(all_predictions, scaler_y)
 
     return all_predictions, true_values
+
 
 
 def predict_with_uncertainty(
@@ -39,7 +98,7 @@ def predict_with_uncertainty(
     test_loader,
     n_samples=100,
     scaler_y=None,
-    device=torch.device('cpu'),
+    device=torch.device("cpu"),
     n_jobs=4,
     alpha=0.05,
 ):
@@ -57,8 +116,8 @@ def predict_with_uncertainty(
             all_trues.append(targets.cpu().numpy())
 
             def sample_once():
-                outs, _ = model(inputs)
-                return outs.detach().cpu().numpy()
+                outputs = _extract_predictions(model(inputs))
+                return outputs.detach().cpu().numpy()
 
             batch_preds = Parallel(n_jobs=n_jobs)(
                 delayed(sample_once)() for _ in range(n_samples)
@@ -69,8 +128,11 @@ def predict_with_uncertainty(
     true_vals = np.concatenate(all_trues, axis=0)
 
     if scaler_y is not None:
-        true_vals = scaler_y.inverse_transform(true_vals)
-        all_preds = np.array([scaler_y.inverse_transform(p) for p in all_preds])
+        true_vals = _inverse_transform_outputs(true_vals, scaler_y)
+        all_preds = np.array([
+            _inverse_transform_outputs(sample_predictions, scaler_y)
+            for sample_predictions in all_preds
+        ])
 
     mean_preds = np.mean(all_preds, axis=0)
     lower = np.percentile(all_preds, 100 * (alpha / 2), axis=0)
@@ -79,46 +141,101 @@ def predict_with_uncertainty(
     return mean_preds, true_vals, lower, upper
 
 
-def plot_predictions(preds, trues, title=None, labels=None, n_display=10950, lower=None, upper=None):
-    """
-    Plot predictive means and optional confidence intervals.
-    """
-    if labels is None:
-        labels = ['Solar', 'Wind']
 
-    N = min(len(preds), n_display)
-    x = np.arange(N)
+def plot_predictions(
+    preds,
+    trues,
+    title=None,
+    labels=None,
+    n_display=None,
+    lower=None,
+    upper=None,
+):
+    """
+    Plot deterministic or variational predictions for static and rolling workflows.
 
-    for i, lab in enumerate(labels):
-        color = 'orangered' if i == 0 else 'dodgerblue'
+    Args:
+        preds: Predicted values with shape (T,) or (T, K).
+        trues: Ground-truth values with shape matching ``preds``.
+        title: Optional plot title prefix applied per output.
+        labels: Optional output labels. Defaults to Solar/Wind and falls back to
+            generic output names when needed.
+        n_display: Optional maximum number of timesteps to display. If ``None``,
+            show the full series.
+        lower: Optional lower uncertainty bound with shape matching ``preds``.
+        upper: Optional upper uncertainty bound with shape matching ``preds``.
+    """
+    preds = _to_numpy_2d(preds)
+    trues = _to_numpy_2d(trues)
+
+    if preds.shape != trues.shape:
+        raise ValueError(
+            f"preds and trues must have matching shapes, got {preds.shape} and {trues.shape}."
+        )
+
+    lower = None if lower is None else _to_numpy_2d(lower)
+    upper = None if upper is None else _to_numpy_2d(upper)
+
+    if (lower is None) != (upper is None):
+        raise ValueError("lower and upper must both be provided when plotting uncertainty bands.")
+
+    if lower is not None and (lower.shape != preds.shape or upper.shape != preds.shape):
+        raise ValueError(
+            "lower and upper must match preds/trues shape when plotting uncertainty bands."
+        )
+
+    total_points = preds.shape[0]
+    display_points = total_points if n_display is None else min(total_points, int(n_display))
+    x = np.arange(display_points)
+    output_labels = _resolve_output_labels(preds.shape[1], labels)
+    output_colors = _resolve_output_colors(preds.shape[1])
+    band_label = "95% CI"
+
+    for output_index, output_label in enumerate(output_labels):
+        color = output_colors[output_index]
         plt.figure(figsize=(16, 6))
-        plt.plot(x, trues[:N, i], 'k', label='Actual')
-        plt.plot(x, preds[:N, i], color=color, linestyle='--', label='Predicted')
+        plt.plot(x, trues[:display_points, output_index], "k", label="Actual")
+        plt.plot(
+            x,
+            preds[:display_points, output_index],
+            color=color,
+            linestyle="--",
+            label="Predicted",
+        )
 
         if lower is not None and upper is not None:
             plt.fill_between(
                 x,
-                lower[:N, i],
-                upper[:N, i],
-                alpha=0.5,
+                lower[:display_points, output_index],
+                upper[:display_points, output_index],
+                alpha=0.3,
                 color=color,
-                label='95% CI',
+                label=band_label,
             )
 
-        plt.xlabel('Time (minutes)')
-        plt.ylabel(lab)
+        plt.xlabel("Time (minutes)")
+        plt.ylabel(output_label)
         plt.grid()
-        if title is not None:
-            plt.title(f"{title} — {lab}")
-        plt.legend(loc='upper right')
+        if title:
+            plt.title(f"{title} — {output_label}")
+        plt.legend(loc="upper right")
         plt.tight_layout()
         plt.show()
+
 
 
 def calculate_and_display_metrics(true_values, mean_predictions):
     """
     Calculate and print R², MAE, and RMSE for each output.
     """
+    true_values = _to_numpy_2d(true_values)
+    mean_predictions = _to_numpy_2d(mean_predictions)
+
+    if true_values.shape != mean_predictions.shape:
+        raise ValueError(
+            "true_values and mean_predictions must have matching shapes to compute metrics."
+        )
+
     n_outputs = true_values.shape[1]
 
     r2_scores = [r2_score(true_values[:, i], mean_predictions[:, i]) for i in range(n_outputs)]
