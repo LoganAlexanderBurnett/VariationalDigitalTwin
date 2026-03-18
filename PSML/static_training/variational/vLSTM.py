@@ -1,5 +1,3 @@
-# Auto-generated from vLSTM.ipynb; edit the notebook if you need to regenerate this script.
-# %% [markdown]
 # # vLSTM forecasting of renewable energy grid production
 # ## - Lookback = 12 timesteps = 2hr
 # ## - lr = 0.001, hidden_size = 35, num_epochs = 50, batch_size = 512
@@ -10,10 +8,8 @@
 # ### 1 Linear layer
 # ### 1 vLinear layer to output
 
-# %% [markdown]
 # ### Import packages, set seed, define model
 
-# %%
 from psml.data_handler import *
 from psml.trainer import *
 from psml.uncertainty import *
@@ -116,17 +112,14 @@ class LSTMReparameterizationModel(nn.Module):
 
         return output, kl
 
-# %% [markdown]
 # ### Loading, downsampling, scaling, and preparing of data
 
-# %%
 #-----------------------------------------------LOAD DATA---------------------------------------------------------#
 df = pd.read_csv('../../dataset/PSML.csv', parse_dates=['time'])
 print(df.shape)
 df.set_index('time', inplace=True)
 df1 = df.fillna(method='ffill').fillna(method='bfill')
 
-# %%
 #---------------------------------SPLIT, SCALE, AND CONVERT TO NP ARRAYS---------------------------------------#
 
 # Use the function with a list of target columns
@@ -185,10 +178,8 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
     # Break after inspecting the first batch
     break
 
-# %% [markdown]
 # ### Instantiate and train vLSTM model
 
-# %%
 # Hyperparameters from GridSearch
 num_layers = 1
 lr = 0.001
@@ -219,7 +210,6 @@ end = time.time()
 train_time = end - start
 print(f"Training time: {train_time:.4f} seconds")
 
-# %%
 # Create the main plot
 plt.figure(figsize=(5, 4))
 plt.plot(train_losses, label="Training Loss")
@@ -230,10 +220,8 @@ plt.title("Training and Validation Loss over Epochs")
 plt.legend(loc='upper right')
 plt.show()
 
-# %% [markdown]
 # # Predict on test data
 
-# %%
 n_samples = 200
 
 # Timing
@@ -246,7 +234,6 @@ end = time.time()
 infer_time = end - start
 print(f"Inference time: {infer_time:.4f} seconds")
 
-# %%
 plot_predictions(
     mean_predictions,
     true_values,
@@ -255,13 +242,10 @@ plot_predictions(
     upper=upper_ci
 )
 
-# %% [markdown]
 # # Calculate R2, MAE, RMSE
 
-# %%
 calculate_and_display_metrics(true_values, mean_predictions)
 
-# %%
 def save_arrays_to_csv(
     true_values: np.ndarray,
     mean_predictions: np.ndarray,
@@ -294,5 +278,4 @@ def save_arrays_to_csv(
 
 save_arrays_to_csv(true_values, mean_predictions, lower_ci, upper_ci, 'vLSTMTest.csv')
 
-# %%
 

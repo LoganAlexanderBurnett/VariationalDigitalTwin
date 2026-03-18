@@ -1,5 +1,3 @@
-# Auto-generated from LSTM.ipynb; edit the notebook if you need to regenerate this script.
-# %% [markdown]
 # # LSTM forecasting of renewable energy grid production
 # ## - Take mean of every 10 timesteps
 # ## - 32,500 timesteps = 325,000 minutes = ~225.7 days: 60% training, 20% validation, 20% test
@@ -11,7 +9,6 @@
 # ### 1 LSTM
 # ### 2 Linear layers, 2nd to output
 
-# %%
 from psml.data_handler import *
 
 import torch
@@ -26,10 +23,8 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, MaxAbsScaler, RobustScaler
 from torch.utils.data import TensorDataset, DataLoader
 
-# %% [markdown]
 # ### Set seed
 
-# %%
 import random
 
 def set_random_seed(seed_value=42):
@@ -51,10 +46,8 @@ def set_random_seed(seed_value=42):
 
 set_random_seed()
 
-# %% [markdown]
 # ### Define Standard LSTM model
 
-# %%
 class StandardLSTMModel(nn.Module):
     def __init__(self, in_features, hidden_size, out_features, num_layers, bias=True):
         super(StandardLSTMModel, self).__init__()
@@ -103,10 +96,8 @@ class StandardLSTMModel(nn.Module):
         
         return output
 
-# %% [markdown]
 # ### Typical loading, scaling, and preparation of data
 
-# %%
 #-----------------------------------------------LOAD DATA---------------------------------------------------------#
 df = pd.read_csv('../../dataset/PSML.csv', parse_dates=['time'])
 df.set_index('time', inplace=True)
@@ -120,7 +111,6 @@ print(df1.shape)
 data = df1
 data
 
-# %%
 #---------------------------------SPLIT, SCALE, AND CONVERT TO NP ARRAYS---------------------------------------#
 
 # Use the function with a list of target columns
@@ -179,10 +169,8 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
     # Break after inspecting the first batch
     break
 
-# %% [markdown]
 # ### Instantiate and train LSTM model
 
-# %%
 # Training function with validation
 def train_lstm(model, train_loader, val_loader, criterion, optimizer, num_epochs):
     model.train()  # Set model to training mode
@@ -229,7 +217,6 @@ def train_lstm(model, train_loader, val_loader, criterion, optimizer, num_epochs
     
     return train_losses, val_losses
 
-# %%
 # Hyperparameters from GridSearch
 input_size = 8  # Number of input features
 output_size = 2  # Number of outputs
@@ -263,7 +250,6 @@ end = time.time()
 train_time = end - start
 print(f"Training time: {train_time:.4f} seconds")
 
-# %%
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 # Create the main plot
@@ -290,10 +276,8 @@ inset_ax.plot(range(len(val_losses) - last_epochs, len(val_losses)), val_losses[
 
 plt.show()
 
-# %% [markdown]
 # # Predict on test data (6470 'future' time steps)
 
-# %%
 def predict_standard_lstm(model, test_loader, scaler_y=None, device=torch.device('cpu')):
     model.eval()  # Set the model to evaluation mode
     
@@ -326,7 +310,6 @@ def predict_standard_lstm(model, test_loader, scaler_y=None, device=torch.device
 
     return all_predictions, true_values
 
-# %%
 # Assuming you have a test DataLoader
 test_predictions, test_actuals = predict_standard_lstm(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
@@ -334,7 +317,6 @@ print("Test Predictions:", test_predictions)
 print("Test Actuals:", test_actuals)
 test_actuals.shape
 
-# %%
 labels = ['Solar Power', 'Wind Power']
 
 # Plot predictions vs actuals
@@ -351,10 +333,8 @@ for output_index, label in zip(range(0,2), labels):
 
 plt.show()
 
-# %% [markdown]
 # # Calculate R2, MAE, RMSE
 
-# %%
 # Number of outputs
 n_outputs = test_actuals.shape[1]
 
@@ -368,7 +348,6 @@ print(f"R2: {r2_scores}")
 print(f"MAE: {mae_scores}")
 print(f"RMSE: {rmse_scores}")
 
-# %%
 def save_arrays_to_csv(array1: np.ndarray, array2: np.ndarray, filename: str):
     # Create a DataFrame from the three arrays
     df = pd.DataFrame({
@@ -384,17 +363,14 @@ def save_arrays_to_csv(array1: np.ndarray, array2: np.ndarray, filename: str):
 
 save_arrays_to_csv(test_actuals, test_predictions, 'StandardLSTMTest.csv')
 
-# %% [markdown]
 # # Predict on train
 
-# %%
 # Assuming you have a test DataLoader
 train_predictions, train_actuals = predict_standard_lstm(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 print("Test Predictions:", train_predictions)
 print("Test Actuals:", train_actuals)
 
-# %%
 labels = ['Solar Power', 'Wind Power']
 
 # Plot predictions vs actuals
@@ -411,7 +387,6 @@ for output_index, label in zip(range(0,2), labels):
 
 plt.show()
 
-# %%
 # Number of outputs
 n_outputs = train_actuals.shape[1]
 
@@ -424,5 +399,4 @@ print(f"R2: {r2_scores}")
 print(f"MAE: {mae_scores}")
 print(f"RMSE: {rmse_scores}")
 
-# %%
 
