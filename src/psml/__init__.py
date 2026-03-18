@@ -9,6 +9,7 @@ from .models import (
     StandardLSTMModel,
 )
 from .trainer import (
+    set_random_seed,
     train_deterministic,
     train_deterministic_rolling,
     train_model,
@@ -31,6 +32,7 @@ __all__ = [
     "predict_with_uncertainty",
     "RollingStandardGRUModel",
     "RollingStandardLSTMModel",
+    "set_random_seed",
     "StandardGRUModel",
     "StandardLSTMModel",
     "train_deterministic",

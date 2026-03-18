@@ -26,24 +26,6 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, MaxAbsScaler, RobustScaler
 from torch.utils.data import TensorDataset, DataLoader
-import random
-
-def set_random_seed(seed_value=42):
-    # Python random seed
-    random.seed(seed_value)
-    
-    # Numpy random seed
-    np.random.seed(seed_value)
-    
-    # PyTorch seed
-    torch.manual_seed(seed_value)
-    
-    # If using CUDA (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # if using multi-GPU
-        torch.backends.cudnn.deterministic = True  # For reproducibility
-        torch.backends.cudnn.benchmark = False  # Disable auto-optimization for determinism
 
 set_random_seed()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

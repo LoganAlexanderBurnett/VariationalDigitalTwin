@@ -1,4 +1,3 @@
-import random
 import numpy as np
 import pandas as pd
 import torch
@@ -14,20 +13,11 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from psml.data_handler import feature_label_split, create_sequences
 from psml.linear_variational import LinearReparameterization
 from psml.models import LSTMReparameterizationModel
-from psml.trainer import train_variational
+from psml.trainer import set_random_seed, train_variational
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
 # -----------------------------------------------------------------------------
-def set_random_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
 set_random_seed()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Device:", device)

@@ -11,7 +11,7 @@
 
 from psml.data_handler import *
 from psml.models import StandardGRUModel
-from psml.trainer import train_deterministic
+from psml.trainer import set_random_seed, train_deterministic
 
 import torch
 import torch.nn as nn
@@ -26,25 +26,6 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, MaxAbsScaler, Ro
 from torch.utils.data import TensorDataset, DataLoader
 
 # ### Set seed
-
-import random
-
-def set_random_seed(seed_value=42):
-    # Python random seed
-    random.seed(seed_value)
-    
-    # Numpy random seed
-    np.random.seed(seed_value)
-    
-    # PyTorch seed
-    torch.manual_seed(seed_value)
-    
-    # If using CUDA (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # if using multi-GPU
-        torch.backends.cudnn.deterministic = True  # For reproducibility
-        torch.backends.cudnn.benchmark = False  # Disable auto-optimization for determinism
 
 set_random_seed()
 
