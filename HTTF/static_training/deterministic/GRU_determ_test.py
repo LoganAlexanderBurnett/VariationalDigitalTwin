@@ -1,4 +1,12 @@
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "src" / "HTTF").exists())
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from HTTF.data_handler import create_autoregressive_sequences
 
 import numpy as np
 import pandas as pd
@@ -48,17 +56,10 @@ test_data = scaler.transform(test)
 valid_data = scaler.transform(valid)
 
 # Create sequences
-def create_sequences(data, lookback=10):
-    X, y = [], []
-    for i in range(lookback, len(data)):
-        X.append(data[i-lookback:i])  # Use the last 'lookback' time steps for prediction
-        y.append(data[i])  # The next time step is the target
-    return np.array(X), np.array(y)
-
 timesteps = 10
-Xtrain, Ytrain = create_sequences(train_data, lookback=timesteps)
-Xtest, Ytest = create_sequences(test_data, lookback=timesteps)
-Xvalid, Yvalid = create_sequences(valid_data, lookback=timesteps)
+Xtrain, Ytrain = create_autoregressive_sequences(train_data, lookback=timesteps)
+Xtest, Ytest = create_autoregressive_sequences(test_data, lookback=timesteps)
+Xvalid, Yvalid = create_autoregressive_sequences(valid_data, lookback=timesteps)
 
 # Convert to PyTorch tensors
 Xtrain_tensor = torch.tensor(Xtrain, dtype=torch.float32).to(device)

@@ -1,4 +1,3 @@
-import random
 import numpy as np
 import pandas as pd
 import torch
@@ -11,19 +10,13 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
+from psml.models import RollingStandardGRUModel as StandardGRUModel
+from psml.predict import plot_predictions, predict_deterministic
+from psml.trainer import set_random_seed, train_deterministic_rolling
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
 # -----------------------------------------------------------------------------
-def set_random_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
 set_random_seed()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Device:", device)
@@ -31,69 +24,10 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 2) Model definition
 # -----------------------------------------------------------------------------
-class StandardGRUModel(nn.Module):
-    def __init__(self, in_f, h, out_f, nl):
-        super().__init__()
-        self.fc1 = nn.Linear(in_f, h)
-        self.gru = nn.GRU(h, h, num_layers=nl, batch_first=True)
-        self.fc2 = nn.Linear(h, h)
-        self.fc3 = nn.Linear(h, out_f)
-
-    def forward(self, x, hidden=None):
-        # x: (batch, seq_len, in_f)
-        x = F.relu(self.fc1(x))
-        if hidden is None:
-            hidden = torch.zeros(
-                self.gru.num_layers, x.size(0), self.gru.hidden_size,
-                device=x.device
-            )
-        seq, h_n = self.gru(x, hidden)
-        last = F.relu(self.fc2(seq[:, -1, :]))
-        return self.fc3(last), h_n
 
 # -----------------------------------------------------------------------------
 # 3) Helpers
 # -----------------------------------------------------------------------------
-def train_gru(model, loader_train, epochs, loss_fn, optimizer, dev):
-    model.to(dev)
-    for ep in range(1, epochs+1):
-        model.train()
-        total_loss = 0.0
-        for xb, yb in loader_train:
-            xb, yb = xb.to(dev), yb.to(dev)
-            optimizer.zero_grad()
-            yp, _ = model(xb)
-            loss = loss_fn(yp, yb)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        avg_loss = total_loss / len(loader_train)
-        if ep % 10 == 0 or ep == 1:
-            print(f"  Epoch {ep}/{epochs} — Train Loss: {avg_loss:.4f}")
-
-def predict_standard_gru(model, loader, scaler_y, dev):
-    model.eval()
-    preds, trues = [], []
-    with torch.no_grad():
-        for xb, yb in loader:
-            xb = xb.to(dev)
-            p, _ = model(xb)
-            preds.append(p.cpu().numpy())
-            trues.append(yb.numpy())
-    preds = np.concatenate(preds, axis=0)
-    trues = np.concatenate(trues, axis=0)
-    return scaler_y.inverse_transform(preds), scaler_y.inverse_transform(trues)
-
-def plot_predictions(preds, trues, title, labels=['Solar','Wind'], n_display=500):
-    N = min(len(preds), n_display)
-    x = np.arange(N)
-    for i, lab in enumerate(labels):
-        plt.figure(figsize=(8,2.5))
-        plt.plot(x, trues[:N,i], label='Actual')
-        plt.plot(x, preds[:N,i], '--', label='Predicted')
-        plt.title(f"{title} — {lab}")
-        plt.legend(); plt.tight_layout(); plt.show()
-
 def sym_mean_absolute_percentage_error(actual, predicted):
     return np.mean(
         np.abs(actual - predicted) / ((np.abs(actual) + np.abs(predicted)) / 2)
@@ -196,11 +130,11 @@ while test_end <= n_samples:
 
     # train
     print(f" Training on samples [{train_start}:{train_end}]")
-    train_gru(model, train_loader, epochs, loss_fn, optimizer, device)
+    train_deterministic_rolling(model, train_loader, optimizer, loss_fn, epochs, device=device)
 
     # test & store metrics
     print(f" Testing on samples [{test_start}:{test_end}]")
-    preds, trues = predict_standard_gru(model, test_loader, scaler_y, device)
+    preds, trues = predict_deterministic(model, test_loader, scaler_y, device)
     plot_predictions(preds, trues, title=f"Session {session} Test Set", n_display=test_window)
 
     # compute per-output metrics

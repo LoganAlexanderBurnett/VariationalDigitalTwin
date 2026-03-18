@@ -10,6 +10,9 @@
 # ### 2 Linear layers, 2nd to output
 
 from psml.data_handler import *
+from psml.models import StandardGRUModel
+from psml.predict import predict_deterministic
+from psml.trainer import set_random_seed, train_deterministic
 
 import torch
 import torch.nn as nn
@@ -25,69 +28,10 @@ from torch.utils.data import TensorDataset, DataLoader
 
 # ### Set seed
 
-import random
-
-def set_random_seed(seed_value=42):
-    # Python random seed
-    random.seed(seed_value)
-    
-    # Numpy random seed
-    np.random.seed(seed_value)
-    
-    # PyTorch seed
-    torch.manual_seed(seed_value)
-    
-    # If using CUDA (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # if using multi-GPU
-        torch.backends.cudnn.deterministic = True  # For reproducibility
-        torch.backends.cudnn.benchmark = False  # Disable auto-optimization for determinism
-
 set_random_seed()
 
 # ### Define Standard GRU model
 
-class StandardGRUModel(nn.Module):
-    def __init__(self, in_features, hidden_size, out_features, num_layers, bias=True):
-        super(StandardGRUModel, self).__init__()
-
-        # First Linear Layer
-        self.fc1 = nn.Linear(in_features, hidden_size, bias=bias)
-        
-        # GRU Layers (num_layers stacked GRUs)
-        self.gru = nn.GRU(input_size=hidden_size, hidden_size=hidden_size, 
-                          num_layers=num_layers, batch_first=True, bias=bias)
-
-        # Second Linear Layer
-        self.fc2 = nn.Linear(hidden_size, hidden_size, bias=bias)
-
-        # Final Output Layer
-        self.fc3 = nn.Linear(hidden_size, out_features, bias=bias)
-
-    def forward(self, x, hidden_states=None):
-        # Pass input through the first linear layer
-        x = self.fc1(x)
-        x = F.relu(x)  # Apply ReLU activation
-        
-        # Initialize hidden states if not provided
-        if hidden_states is None:
-            hidden_states = torch.zeros(self.gru.num_layers, x.size(0), self.gru.hidden_size, device=x.device)
-        
-        # Pass through GRU layers, returning the output sequence and final hidden state
-        hidden_seq, hidden_last = self.gru(x, hidden_states)
-
-        # Take the last layer’s hidden state
-        hidden_last = hidden_seq[:, -1, :]
-        
-        # Pass through second linear layer
-        hidden_last = self.fc2(hidden_last)
-        hidden_last = F.relu(hidden_last)  # Apply ReLU activation
-
-        # Pass through the final output layer
-        output = self.fc3(hidden_last)
-        
-        return output
 
 # ### Typical loading, scaling, and preparation of data
 
@@ -164,65 +108,6 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
 
 # ### Instantiate and train GRU model
 
-# Training process (standard GRU model)
-def train_gru(model, train_loader, val_loader, num_epochs, loss_fn, optimizer, device=torch.device('cpu')):
-    model.to(device)
-
-    train_losses = []
-    val_losses = []
-
-    for epoch in range(num_epochs):
-        model.train()
-        running_train_loss = 0.0
-
-        # Training loop
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-
-            # Zero out the gradients from the optimizer
-            optimizer.zero_grad()
-
-            # Forward pass through the model
-            outputs = model(inputs)
-
-            # Compute the loss (no KL divergence in standard GRU model)
-            loss = loss_fn(outputs, targets)
-
-            # Backward pass to compute gradients
-            loss.backward()
-
-            # Optimizer step to update weights
-            optimizer.step()
-
-            running_train_loss += loss.item()
-
-        # Compute average training loss
-        avg_train_loss = running_train_loss / len(train_loader)
-        train_losses.append(avg_train_loss)
-
-        # Validation loop
-        model.eval()
-        running_val_loss = 0.0
-        with torch.no_grad():  # Disable gradient calculation for validation
-            for val_inputs, val_targets in val_loader:
-                val_inputs, val_targets = val_inputs.to(device), val_targets.to(device)
-
-                # Forward pass on validation data
-                val_outputs = model(val_inputs)
-
-                # Compute the validation loss
-                val_loss = loss_fn(val_outputs, val_targets)
-                running_val_loss += val_loss.item()
-
-        # Compute average validation loss
-        avg_val_loss = running_val_loss / len(val_loader)
-        val_losses.append(avg_val_loss)
-
-        # Print progress for each epoch
-        print(f'Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
-
-    return train_losses, val_losses
-
 # Hyperparameters from GridSearch
 num_layers = 1
 lr = 0.001
@@ -247,9 +132,18 @@ reconstruction_loss_fn = torch.nn.MSELoss()  # regression task
 start = time.time()
 
 # Train the model
-train_losses, val_losses = train_gru(
-    model, train_loader, val_loader, num_epochs=num_epochs, loss_fn=reconstruction_loss_fn, optimizer=optimizer, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+history = train_deterministic(
+    model=model,
+    train_loader=train_loader,
+    optimizer=optimizer,
+    loss_fn=reconstruction_loss_fn,
+    num_epochs=num_epochs,
+    device=device,
+    val_loader=val_loader,
 )
+train_losses = history["train_losses"]
+val_losses = history["val_losses"]
 
 end = time.time()
 train_time = end - start
@@ -283,41 +177,9 @@ plt.show()
 
 # # Predict on test data
 
-def predict_standard_gru(model, test_loader, scaler_y=None, device=torch.device('cpu')):
-    model.eval()  # Set the model to evaluation mode
-    
-    all_predictions = []
-    true_values = []
-
-    # Disable gradient computation for inference
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-
-            # Store true values for comparison
-            true_values.append(targets.cpu().numpy())
-
-            # Generate predictions for each input
-            outputs = model(inputs)
-
-            # Store predictions
-            all_predictions.append(outputs.cpu().numpy())
-
-    # Concatenate predictions and true values across all batches
-    all_predictions = np.concatenate(all_predictions, axis=0)  # Shape: (total_samples, num_outputs)
-    true_values = np.concatenate(true_values, axis=0)  # Shape: (total_samples, num_outputs)
-
-    # Apply inverse scaling if scaler_y is provided
-    if scaler_y is not None:
-        true_values = scaler_y.inverse_transform(true_values)
-        all_predictions = scaler_y.inverse_transform(all_predictions)
-
-    return all_predictions, true_values
-
 # Assuming you have a test DataLoader
 start = time.time()
-test_predictions, test_actuals = predict_standard_gru(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+test_predictions, test_actuals = predict_deterministic(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 end = time.time()
 print(f"Inference took {end-start}s.")
 
@@ -373,7 +235,7 @@ save_arrays_to_csv(test_actuals, test_predictions, 'StandardGRUTest.csv')
 # # Predict on train
 
 # Assuming you have a test DataLoader
-train_predictions, train_actuals = predict_standard_gru(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+train_predictions, train_actuals = predict_deterministic(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 print("Test Predictions:", train_predictions)
 print("Test Actuals:", train_actuals)

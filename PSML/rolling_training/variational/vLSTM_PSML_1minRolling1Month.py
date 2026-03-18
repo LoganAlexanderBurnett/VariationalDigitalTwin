@@ -1,4 +1,3 @@
-import random
 import numpy as np
 import pandas as pd
 import torch
@@ -13,19 +12,13 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
 from psml.linear_variational import LinearReparameterization
+from psml.models import LSTMReparameterizationModel
+from psml.predict import plot_predictions, predict_with_uncertainty
+from psml.trainer import set_random_seed, train_variational
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
 # -----------------------------------------------------------------------------
-def set_random_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
 set_random_seed()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Device:", device)
@@ -33,230 +26,10 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 2) Model definition
 # -----------------------------------------------------------------------------
-class LSTMReparameterizationModel(nn.Module):
-    def __init__(
-        self,
-        in_features,
-        hidden_size,
-        out_features,
-        num_layers,
-        prior_mean=0,
-        prior_variance=0.5,
-        posterior_rho_init=-4.0,
-        bias=True
-    ):
-        super().__init__()
-
-        # 1) Deterministic input projection
-        self.fc1 = nn.Linear(in_features, hidden_size, bias=bias)
-
-        # 2) Deterministic multi-layer LSTM
-        self.lstm = nn.LSTM(
-            input_size=hidden_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            bias=bias
-        )
-
-        # 3) Deterministic penultimate layer
-        self.fc2 = nn.Linear(hidden_size, hidden_size, bias=bias)
-
-        # 4) **Only this** is variational
-        self.fc3 = LinearReparameterization(
-            in_features=hidden_size,
-            out_features=out_features,
-            prior_mean=prior_mean,
-            prior_variance=prior_variance,
-            posterior_rho_init=posterior_rho_init,
-            bias=bias
-        )
-
-    def forward(self, x, hidden_states=None):
-        """
-        x: Tensor of shape (batch, seq_len, in_features)
-        hidden_states: either None or a tuple (h0, c0), each of shape 
-                       (num_layers, batch, hidden_size).
-        """
-
-        # 1) Deterministic linear + ReLU
-        x = self.fc1(x)          # → (batch, seq_len, hidden_size)
-        x = F.relu(x)
-
-        # 2) LSTM
-        lstm_out, (h_n, c_n) = self.lstm(x, hidden_states)
-        # h_n: (num_layers, batch, hidden_size)
-        last_hidden = h_n[-1]    # → (batch, hidden_size)
-
-        # 3) Deterministic linear + ReLU on last_hidden
-        last_hidden = self.fc2(last_hidden)
-        last_hidden = F.relu(last_hidden)
-
-        # 4) Variational output layer (unchanged)
-        output, kl = self.fc3(last_hidden)
-
-        return output, kl
 
 # -----------------------------------------------------------------------------
 # 3) Helpers
 # -----------------------------------------------------------------------------
-def train_model(model, train_loader, num_epochs, reconstruction_loss_fn, optimizer, device=torch.device('cpu'), kl_schedule=None):
-    model.to(device)
-    
-    train_losses = []
-
-    for epoch in range(num_epochs):
-        model.train()
-
-        if kl_schedule == 'linear':
-            kl_weight = epoch / num_epochs
-        elif kl_schedule == 'sigmoid_growth':
-            kl_weight = 0.1 / (1 + np.exp(-2 * (epoch - 0.7 * num_epochs))) + 0.001 # max / (1 + e^[-rate * (epoch - frac_training_w/o_KL*num_epochs)]) + min
-        elif kl_schedule == 'sigmoid_decay':
-            kl_weight = 0.1 / (1 + np.exp(2 * (epoch - 0.15 * num_epochs))) + 0.001
-        else: 
-            kl_weight = 1e-4
-        
-        running_train_loss = 0.0
-        running_recon_loss = 0.0
-        running_kl_loss    = 0.0
-        
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            optimizer.zero_grad()
-
-            # Forward pass
-            outputs, kl_loss = model(inputs)
-
-            # Compute the reconstruction loss
-            reconstruction_loss = reconstruction_loss_fn(outputs, targets)
-
-            # Total loss (reconstruction + KL divergence)
-            total_loss = reconstruction_loss + kl_weight * kl_loss
-
-            # Backward pass
-            total_loss.backward()
-            optimizer.step()
-
-            # Accumulate
-            running_train_loss += total_loss.item()
-            running_recon_loss += reconstruction_loss.item()
-            running_kl_loss    += kl_loss.item()
-
-        # Compute per‐batch averages
-        n_batches = len(train_loader)
-        avg_recon = running_recon_loss / n_batches
-        avg_kl    = running_kl_loss    / n_batches
-        avg_train_loss = running_train_loss / n_batches
-        train_losses.append(avg_train_loss)
-
-        if (epoch+1) % 10 == 0:
-            print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.6f}, MSE Loss: {avg_recon:.6f},KL Loss: {avg_kl:.6f}')
-
-    return train_losses
-
-
-from joblib import Parallel, delayed
-
-def predict_with_uncertainty(
-    model,
-    test_loader,
-    n_samples=100,
-    scaler_y=None,
-    device=torch.device('cpu'),
-    n_jobs=4,
-    alpha=0.05
-):
-    """
-    Runs MC sampling through `model` to estimate uncertainty.
-    
-    Returns:
-      mean_preds: (N, K) array of predictive means
-      true_vals:  (N, K) array of ground truths
-      lower:      (N, K) lower bound at alpha/2 (default 2.5%)
-      upper:      (N, K) upper bound at 1-alpha/2 (default 97.5%)
-    """
-    model.eval()
-    all_preds = []
-    all_trues = []
-    
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-            all_trues.append(targets.cpu().numpy())
-            
-            # sample forward passes in parallel
-            def sample_once():
-                outs, _ = model(inputs)
-                return outs.detach().cpu().numpy()
-            
-            batch_preds = Parallel(n_jobs=n_jobs)(
-                delayed(sample_once)() for _ in range(n_samples)
-            )  # list of (batch, K) arrays
-            
-            # stack into shape (n_samples, batch, K)
-            all_preds.append(np.stack(batch_preds, axis=0))
-    
-    # stack across batches → (n_samples, total_N, K)
-    all_preds = np.concatenate(all_preds, axis=1)
-    true_vals = np.concatenate(all_trues, axis=0)  # (total_N, K)
-    
-    # inverse-transform if needed
-    if scaler_y is not None:
-        true_vals = scaler_y.inverse_transform(true_vals)
-        all_preds = np.array([scaler_y.inverse_transform(p) for p in all_preds])
-    
-    # compute statistics over the sample axis
-    mean_preds = np.mean(all_preds, axis=0)  # (total_N, K)
-    lower = np.percentile(all_preds, 100 * (alpha/2), axis=0)
-    upper = np.percentile(all_preds, 100 * (1 - alpha/2), axis=0)
-    
-    return mean_preds, true_vals, lower, upper
-
-
-def plot_predictions(
-    preds,
-    trues,
-    title,
-    labels=['Solar','Wind'],
-    n_display=500,
-    lower=None,
-    upper=None
-):
-    """
-    preds:        (T, K) array of predictive means
-    trues:        (T, K) array of ground‐truths
-    lower, upper: optional (T, K) arrays of UQ bounds (e.g. 2.5% and 97.5% quantiles)
-    """
-    N = min(len(preds), n_display)
-    x = np.arange(N)
-
-    for i, lab in enumerate(labels):
-        plt.figure(figsize=(16,6))
-        # actual vs mean
-        plt.plot(x, trues[:N, i], 'k',      label='Actual')
-        plt.plot(x, preds[:N, i], 'r--', label='Predicted')
-
-        # fill the UQ band if provided
-        if lower is not None and upper is not None:
-            plt.fill_between(
-                x,
-                lower[:N, i],
-                upper[:N, i],
-                alpha=0.3,
-                color='r',
-                label='95% CI'
-            )
-
-        plt.xlabel('Time (minutes)')
-        plt.ylabel(lab)
-        plt.xlim(0,10_000)
-        plt.grid()
-        plt.title(f"{title} — {lab}")
-        plt.legend(loc='upper right')
-        plt.tight_layout()
-        plt.show()
 
 
 # -----------------------------------------------------------------------------
@@ -370,7 +143,7 @@ while test_end <= n_samples:
     # train (assumes your train_lstm handles the KL term returned by the variational model)
     print(f" Training on samples [{train_start}:{train_end}]")
     start = time.time()
-    train_model(model, train_loader, epochs, loss_fn, optimizer, device)
+    train_variational(model, train_loader, optimizer, loss_fn, epochs, device=device, log_every=10, return_history=False)
     end = time.time()
     train_time = end-start
     training_time.append(train_time)

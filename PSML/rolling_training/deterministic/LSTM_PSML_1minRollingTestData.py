@@ -1,4 +1,3 @@
-import random
 import numpy as np
 import pandas as pd
 import torch
@@ -12,110 +11,25 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
+from psml.models import RollingStandardLSTMModel as StandardLSTMModel
+from psml.predict import plot_predictions, predict_deterministic
+from psml.trainer import set_random_seed, train_deterministic_rolling
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
 # -----------------------------------------------------------------------------
-def set_random_seed(seed=421):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
-set_random_seed()
+set_random_seed(421)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Device:", device)
 
 # -----------------------------------------------------------------------------
 # 2) Model definition
 # -----------------------------------------------------------------------------
-class StandardLSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, num_layers=1):
-        super().__init__()
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True   # or False, depending on your data layout
-        )
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, output_size)
-
-    def forward(self, x, hidden=None):
-        # x: (batch, seq_len, input_size) if batch_first=True
-        batch_size = x.size(0)
-
-        # if hidden is None:
-        #     # Create h₀ and c₀ as zeros:
-        #     h0 = torch.zeros(
-        #         self.lstm.num_layers,
-        #         batch_size,
-        #         self.lstm.hidden_size,
-        #         device=x.device
-        #     )
-        #     c0 = torch.zeros(
-        #         self.lstm.num_layers,
-        #         batch_size,
-        #         self.lstm.hidden_size,
-        #         device=x.device
-        #     )
-        #     hidden = (h0, c0)
-
-        # Now hidden is a tuple (h₀, c₀), each of shape (num_layers, batch, hidden_size).
-        seq, (h_n, c_n) = self.lstm(x, hidden)
-
-        # Take the last time-step’s features, then feed through your FC layers:
-        last = F.relu(self.fc2(seq[:, -1, :]))   # seq[:, -1, :] is shape (batch, hidden_size)
-        out = self.fc3(last)                     # shape (batch, output_size)
-        return out, (h_n, c_n)
 
 
 # -----------------------------------------------------------------------------
 # 3) Helpers
 # -----------------------------------------------------------------------------
-def train_lstm(model, loader_train, epochs, loss_fn, optimizer, dev):
-    model.to(dev)
-    for ep in range(1, epochs+1):
-        model.train()
-        total_loss = 0.0
-        for xb, yb in loader_train:
-            xb, yb = xb.to(dev), yb.to(dev)
-            optimizer.zero_grad()
-            yp, _ = model(xb)
-            loss = loss_fn(yp, yb)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        avg_loss = total_loss / len(loader_train)
-        if ep % 10 == 0 or ep == 1:
-            print(f"  Epoch {ep}/{epochs} — Train Loss: {avg_loss:.4f}")
-
-def predict_standard_lstm(model, loader, scaler_y, dev):
-    model.eval()
-    preds, trues = [], []
-    with torch.no_grad():
-        for xb, yb in loader:
-            xb = xb.to(dev)
-            p, _ = model(xb)
-            preds.append(p.cpu().numpy())
-            trues.append(yb.numpy())
-    preds = np.concatenate(preds, axis=0)
-    trues = np.concatenate(trues, axis=0)
-    return scaler_y.inverse_transform(preds), scaler_y.inverse_transform(trues)
-
-def plot_predictions(preds, trues, title, labels=['Solar','Wind'], n_display=500):
-    N = min(len(preds), n_display)
-    x = np.arange(N)
-    for i, lab in enumerate(labels):
-        plt.figure(figsize=(8,2.5))
-        plt.plot(x, trues[:N,i], label='Actual')
-        plt.plot(x, preds[:N,i], '--', label='Predicted')
-        plt.title(f"{title} — {lab}")
-        plt.legend(); plt.tight_layout(); plt.show()
-
 def sym_mean_absolute_percentage_error(actual, predicted):
     return np.mean(
         np.abs(actual - predicted) / ((np.abs(actual) + np.abs(predicted)) / 2)
@@ -221,7 +135,7 @@ while test_end <= n_samples:
     # train
     print(f" Training on samples [{train_start}:{train_end}]")
     start_train = time.time()
-    train_lstm(model, train_loader, epochs, loss_fn, optimizer, device)
+    train_deterministic_rolling(model, train_loader, optimizer, loss_fn, epochs, device=device)
     end_train = time.time()
     train_time = end_train - start_train
     training_time.append(train_time)
@@ -230,7 +144,7 @@ while test_end <= n_samples:
     # test & store metrics
     print(f" Testing on samples [{test_start}:{test_end}]")
     start_infer = time.time()
-    preds, trues = predict_standard_lstm(model, test_loader, scaler_y, device)
+    preds, trues = predict_deterministic(model, test_loader, scaler_y, device)
     end_infer = time.time()
     infer_time = end_infer - start_infer
     inference_time.append(infer_time)

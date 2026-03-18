@@ -10,6 +10,9 @@
 # ### 2 Linear layers, 2nd to output
 
 from psml.data_handler import *
+from psml.models import StandardLSTMModel
+from psml.predict import predict_deterministic
+from psml.trainer import set_random_seed, train_deterministic
 
 import torch
 import torch.nn as nn
@@ -25,76 +28,10 @@ from torch.utils.data import TensorDataset, DataLoader
 
 # ### Set seed
 
-import random
-
-def set_random_seed(seed_value=42):
-    # Python random seed
-    random.seed(seed_value)
-    
-    # Numpy random seed
-    np.random.seed(seed_value)
-    
-    # PyTorch seed
-    torch.manual_seed(seed_value)
-    
-    # If using CUDA (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # if using multi-GPU
-        torch.backends.cudnn.deterministic = True  # For reproducibility
-        torch.backends.cudnn.benchmark = False  # Disable auto-optimization for determinism
-
 set_random_seed()
 
 # ### Define Standard LSTM model
 
-class StandardLSTMModel(nn.Module):
-    def __init__(self, in_features, hidden_size, out_features, num_layers, bias=True):
-        super(StandardLSTMModel, self).__init__()
-
-        # First Linear Layer
-        self.fc1 = nn.Linear(in_features, hidden_size, bias=bias)
-        
-        # LSTM Layers (num_layers stacked LSTMs)
-        self.lstm = nn.LSTM(input_size=hidden_size, hidden_size=hidden_size,
-                            num_layers=num_layers, batch_first=True, bias=bias)
-
-        # Dropout layer to avoid overfitting
-        self.dropout = nn.Dropout(p=0.5)
-
-        # Second Linear Layer
-        self.fc2 = nn.Linear(hidden_size, hidden_size, bias=bias)
-
-        # Final Output Layer
-        self.fc3 = nn.Linear(hidden_size, out_features, bias=bias)
-
-    def forward(self, x, hidden_states=None):
-        # Pass input through the first linear layer
-        x = self.fc1(x)
-        x = F.relu(x)  # Apply ReLU activation
-
-        # Initialize hidden states if not provided
-        if hidden_states is None:
-            hidden_states = (
-                torch.zeros(self.lstm.num_layers, x.size(0), self.lstm.hidden_size, device=x.device),
-                torch.zeros(self.lstm.num_layers, x.size(0), self.lstm.hidden_size, device=x.device)
-            )
-        
-        # Pass through LSTM layers, returning the output sequence and final states
-        hidden_seq, (hidden_last, cell_last) = self.lstm(x, hidden_states)
-
-        # Apply dropout to the last hidden state
-        # hidden_last = self.dropout(hidden_last[-1])  # Take the last layer’s hidden state
-        hidden_last = hidden_seq[:, -1, :]  # Last time step output
-
-        # Pass through second linear layer
-        hidden_last = self.fc2(hidden_last)
-        hidden_last = F.relu(hidden_last)  # Apply ReLU activation
-
-        # Pass through the final output layer
-        output = self.fc3(hidden_last)
-        
-        return output
 
 # ### Typical loading, scaling, and preparation of data
 
@@ -171,52 +108,6 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
 
 # ### Instantiate and train LSTM model
 
-# Training function with validation
-def train_lstm(model, train_loader, val_loader, criterion, optimizer, num_epochs):
-    model.train()  # Set model to training mode
-    train_losses = []
-    val_losses = []
-
-    for epoch in range(num_epochs):
-        epoch_loss = 0.0
-        model.train()  # Ensure model is in training mode
-
-        for inputs, targets in train_loader:  # Training loop
-            # Move data to the appropriate device (CPU or GPU)
-            inputs, targets = inputs.to(device), targets.to(device)
-            
-            # Forward pass
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            
-            # Backward pass and optimization
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            # Accumulate loss for this batch
-            epoch_loss += loss.item()
-        
-        # Average training loss for the epoch
-        avg_train_loss = epoch_loss / len(train_loader)
-        train_losses.append(avg_train_loss)
-
-        # Validation step
-        model.eval()  # Set model to evaluation mode
-        val_loss = 0.0
-        with torch.no_grad():  # Disable gradient computation for validation
-            for val_inputs, val_targets in val_loader:
-                val_inputs, val_targets = val_inputs.to(device), val_targets.to(device)
-                val_outputs = model(val_inputs)
-                val_loss += criterion(val_outputs, val_targets).item()
-
-        avg_val_loss = val_loss / len(val_loader)
-        val_losses.append(avg_val_loss)
-
-        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
-    
-    return train_losses, val_losses
-
 # Hyperparameters from GridSearch
 input_size = 8  # Number of input features
 output_size = 2  # Number of outputs
@@ -244,7 +135,17 @@ optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 start = time.time()
 
 # Train the model and visualize losses
-train_losses, val_losses = train_lstm(model, train_loader, val_loader, criterion, optimizer, num_epochs)
+history = train_deterministic(
+    model=model,
+    train_loader=train_loader,
+    optimizer=optimizer,
+    loss_fn=criterion,
+    num_epochs=num_epochs,
+    device=device,
+    val_loader=val_loader,
+)
+train_losses = history["train_losses"]
+val_losses = history["val_losses"]
 
 end = time.time()
 train_time = end - start
@@ -278,40 +179,8 @@ plt.show()
 
 # # Predict on test data (6470 'future' time steps)
 
-def predict_standard_lstm(model, test_loader, scaler_y=None, device=torch.device('cpu')):
-    model.eval()  # Set the model to evaluation mode
-    
-    all_predictions = []
-    true_values = []
-
-    # Disable gradient computation for inference
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-
-            # Store true values for comparison
-            true_values.append(targets.cpu().numpy())
-
-            # Generate predictions for each input
-            outputs = model(inputs)
-
-            # Store predictions
-            all_predictions.append(outputs.cpu().numpy())
-
-    # Concatenate predictions and true values across all batches
-    all_predictions = np.concatenate(all_predictions, axis=0)  # Shape: (total_samples, num_outputs)
-    true_values = np.concatenate(true_values, axis=0)  # Shape: (total_samples, num_outputs)
-
-    # Apply inverse scaling if scaler_y is provided
-    if scaler_y is not None:
-        true_values = scaler_y.inverse_transform(true_values)
-        all_predictions = scaler_y.inverse_transform(all_predictions)
-
-    return all_predictions, true_values
-
 # Assuming you have a test DataLoader
-test_predictions, test_actuals = predict_standard_lstm(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+test_predictions, test_actuals = predict_deterministic(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 print("Test Predictions:", test_predictions)
 print("Test Actuals:", test_actuals)
@@ -366,7 +235,7 @@ save_arrays_to_csv(test_actuals, test_predictions, 'StandardLSTMTest.csv')
 # # Predict on train
 
 # Assuming you have a test DataLoader
-train_predictions, train_actuals = predict_standard_lstm(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+train_predictions, train_actuals = predict_deterministic(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 print("Test Predictions:", train_predictions)
 print("Test Actuals:", train_actuals)

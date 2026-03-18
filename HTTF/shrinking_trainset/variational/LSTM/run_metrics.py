@@ -4,7 +4,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import time
@@ -12,8 +11,18 @@ from torchinfo import summary
 import json
 import os
 import argparse
-from torch.nn import Parameter
-from joblib import Parallel, delayed
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "src" / "HTTF").exists())
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from HTTF.data_handler import create_autoregressive_sequences
+from HTTF.linear_variational import LinearReparameterization
+from HTTF.trainer import train_model
+from HTTF.uncertainty import predict_with_uncertainty
 
 def set_random_seed(seed_value=42):
     # Python random seed
@@ -78,17 +87,10 @@ test_data = scaler.transform(test)
 valid_data = scaler.transform(valid)
 
 # Create sequences
-def create_sequences(data, lookback=10):
-    X, y = [], []
-    for i in range(lookback, len(data)):
-        X.append(data[i-lookback:i])  # Use the last 'lookback' time steps for prediction
-        y.append(data[i])  # The next time step is the target
-    return np.array(X), np.array(y)
-
 timesteps = 10
-Xtrain, Ytrain = create_sequences(train_data, lookback=timesteps)
-Xtest, Ytest = create_sequences(test_data, lookback=timesteps)
-Xvalid, Yvalid = create_sequences(valid_data, lookback=timesteps)
+Xtrain, Ytrain = create_autoregressive_sequences(train_data, lookback=timesteps)
+Xtest, Ytest = create_autoregressive_sequences(test_data, lookback=timesteps)
+Xvalid, Yvalid = create_autoregressive_sequences(valid_data, lookback=timesteps)
 
 # Convert to PyTorch tensors
 Xtrain_tensor = torch.tensor(Xtrain, dtype=torch.float32).to(device)
@@ -104,90 +106,6 @@ Xtest,   Ytest: {Xtest_tensor.shape}, {Ytest_tensor.shape}
 Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
 )
 
-
-class BaseVariationalLayer_(nn.Module):
-    def __init__(self):
-        super().__init__()
-    def kl_div(self, mu_q, sigma_q, mu_p, sigma_p):
-        kl = torch.log(sigma_p) - torch.log(sigma_q) \
-             + (sigma_q**2 + (mu_q - mu_p)**2) / (2 * sigma_p**2) \
-             - 0.5
-        return kl.mean()
-
-class LinearReparameterization(BaseVariationalLayer_):
-    def __init__(self,
-                 in_features,
-                 out_features,
-                 prior_mean=0.0,
-                 prior_variance=1.0,
-                 posterior_mu_init=0.0,
-                 posterior_rho_init=-3.0,
-                 bias=True):
-        super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.prior_mean      = prior_mean
-        self.prior_variance  = prior_variance
-        self.posterior_mu_init  = posterior_mu_init
-        self.posterior_rho_init = posterior_rho_init
-        self.bias_flag = bias
-
-        # posterior params
-        self.mu_weight  = Parameter(torch.Tensor(out_features, in_features))
-        self.rho_weight = Parameter(torch.Tensor(out_features, in_features))
-        self.register_buffer('prior_weight_mu',
-                             torch.full((out_features, in_features), prior_mean),
-                             persistent=False)
-        self.register_buffer('prior_weight_sigma',
-                             torch.full((out_features, in_features), prior_variance),
-                             persistent=False)
-
-        if bias:
-            self.mu_bias  = Parameter(torch.Tensor(out_features))
-            self.rho_bias = Parameter(torch.Tensor(out_features))
-            self.register_buffer('prior_bias_mu',
-                                 torch.full((out_features,), prior_mean),
-                                 persistent=False)
-            self.register_buffer('prior_bias_sigma',
-                                 torch.full((out_features,), prior_variance),
-                                 persistent=False)
-        else:
-            self.register_parameter('mu_bias', None)
-            self.register_parameter('rho_bias', None)
-            self.register_buffer('prior_bias_mu', None, persistent=False)
-            self.register_buffer('prior_bias_sigma', None, persistent=False)
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        self.mu_weight.data.normal_(mean=self.posterior_mu_init, std=0.1)
-        self.rho_weight.data.normal_(mean=self.posterior_rho_init, std=0.1)
-        if self.bias_flag:
-            self.mu_bias.data.normal_(mean=self.posterior_mu_init, std=0.1)
-            self.rho_bias.data.normal_(mean=self.posterior_rho_init, std=0.1)
-
-    def forward(self, input):
-        sigma_w = torch.log1p(torch.exp(self.rho_weight))
-        eps_w   = torch.randn_like(self.mu_weight)
-        w = self.mu_weight + sigma_w * eps_w
-
-        if self.bias_flag:
-            sigma_b = torch.log1p(torch.exp(self.rho_bias))
-            eps_b   = torch.randn_like(self.mu_bias)
-            b = self.mu_bias + sigma_b * eps_b
-        else:
-            b = None
-
-        out = F.linear(input, w, b)
-
-        kl_w = self.kl_div(self.mu_weight, sigma_w,
-                           self.prior_weight_mu, self.prior_weight_sigma)
-        kl_b = torch.tensor(0.0, device=kl_w.device)
-        if self.bias_flag:
-            kl_b = self.kl_div(self.mu_bias, sigma_b,
-                               self.prior_bias_mu, self.prior_bias_sigma)
-        kl = kl_w + kl_b
-        return out, kl
 
 # Define the LSTM model
 class vLSTM(nn.Module):
@@ -255,67 +173,6 @@ train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
 valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size)
 
-# Training process (with KL divergence handling)
-def train_model(model, train_loader, val_loader, num_epochs, reconstruction_loss_fn, optimizer, device=torch.device('cpu'), kl_schedule='linear'):
-    model.to(device)
-    
-    train_losses = []
-    val_losses = []
-
-    for epoch in range(num_epochs):
-        model.train()
-
-        if kl_schedule == 'linear':
-            kl_weight = epoch / num_epochs
-        elif kl_schedule == 'sigmoid_growth':
-            kl_weight = 0.05 / (1 + np.exp(-2 * (epoch - 0.7 * num_epochs))) + 0.0005 # max / (1 + e^[-rate * (epoch - frac_training_w/o_KL*num_epochs)]) + min
-        elif kl_schedule == 'sigmoid_decay':
-            kl_weight = 0.05 / (1 + np.exp(2 * (epoch - 0.15 * num_epochs))) + 0.0005
-        else: 
-            kl_weight = 1e-4
-        
-        running_train_loss = 0.0
-
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            optimizer.zero_grad()
-
-            # Forward pass
-            outputs, kl_loss = model(inputs)
-
-            # Compute the reconstruction loss
-            reconstruction_loss = reconstruction_loss_fn(outputs, targets)
-
-            # Total loss (reconstruction + KL divergence)
-            total_loss = reconstruction_loss + kl_weight * kl_loss
-
-            # Backward pass
-            total_loss.backward()
-            optimizer.step()
-
-            running_train_loss += total_loss.item()
-
-        avg_train_loss = running_train_loss / len(train_loader)
-        train_losses.append(avg_train_loss)
-
-        # Validation loop
-        model.eval()
-        running_val_loss = 0.0
-        with torch.no_grad():
-            for val_inputs, val_targets in val_loader:
-                val_inputs, val_targets = val_inputs.to(device), val_targets.to(device)
-                val_outputs, val_kl_loss = model(val_inputs)
-
-                val_reconstruction_loss = reconstruction_loss_fn(val_outputs, val_targets)
-                val_total_loss = val_reconstruction_loss + kl_weight * val_kl_loss
-                running_val_loss += val_total_loss.item()
-
-        avg_val_loss = running_val_loss / len(val_loader)
-        val_losses.append(avg_val_loss)
-
-        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, KL Weight: {kl_weight}')
-
-    return train_losses, val_losses
 
 start = time.time()
 
@@ -337,65 +194,6 @@ plt.legend()
 plt.grid()
 plt.savefig("training.png", bbox_inches='tight')
 plt.close()
-
-
-# Function to make predictions multiple times to capture uncertainty
-def predict_with_uncertainty(
-    model,
-    test_loader,
-    n_samples=100,
-    scaler_y=None,
-    device=torch.device('cpu'),
-    alpha=0.05
-):
-    """
-    Runs MC sampling through `model` to estimate uncertainty,
-    but without extra-process overhead.
-
-    Returns:
-      mean_preds: (N, K) array of predictive means
-      true_vals:  (N, K) array of ground truths
-      lower:      (N, K) lower bound at alpha/2 (default 2.5%)
-      upper:      (N, K) upper bound at 1-alpha/2 (default 97.5%)
-    """
-    model.eval()
-    all_preds = []
-    all_trues = []
-
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-
-            # collect the true values
-            all_trues.append(targets.cpu().numpy())
-
-            # do n_samples forward passes _sequentially_
-            batch_preds = []
-            for _ in range(n_samples):
-                outs, _ = model(inputs)
-                batch_preds.append(outs.cpu().numpy())
-
-            # shape (n_samples, batch, K)
-            all_preds.append(np.stack(batch_preds, axis=0))
-
-    # concatenate across batches → (n_samples, total_N, K)
-    all_preds = np.concatenate(all_preds, axis=1)
-    true_vals = np.concatenate(all_trues, axis=0)  # (total_N, K)
-
-    # inverse scaling if needed
-    if scaler_y is not None:
-        true_vals = scaler_y.inverse_transform(true_vals)
-        all_preds = np.array(
-            [scaler_y.inverse_transform(p) for p in all_preds]
-        )
-
-    # now compute stats over the sample axis
-    mean_preds = np.mean(all_preds, axis=0)   # (total_N, K)
-    lower     = np.percentile(all_preds, 100 * (alpha/2),    axis=0)
-    upper     = np.percentile(all_preds, 100 * (1-alpha/2), axis=0)
-
-    return mean_preds, true_vals, lower, upper
 
 
 n_samples = 100
