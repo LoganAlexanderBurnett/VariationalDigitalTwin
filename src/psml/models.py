@@ -156,8 +156,9 @@ class RollingStandardGRUModel(nn.Module):
 class RollingStandardLSTMModel(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers=1):
         super().__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
         self.lstm = nn.LSTM(
-            input_size=input_size,
+            input_size=hidden_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
@@ -166,6 +167,7 @@ class RollingStandardLSTMModel(nn.Module):
         self.fc3 = nn.Linear(hidden_size, output_size)
 
     def forward(self, x, hidden=None):
+        x = F.relu(self.fc1(x))
         seq, (h_n, c_n) = self.lstm(x, hidden)
         last = F.relu(self.fc2(seq[:, -1, :]))
         out = self.fc3(last)
