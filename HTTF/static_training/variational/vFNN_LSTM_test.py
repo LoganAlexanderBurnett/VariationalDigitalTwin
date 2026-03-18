@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,6 +16,8 @@ from data_handler import *
 from trainer import *
 from uncertainty import *
 from linear_variational import *
+
+DATA_DIR = Path(__file__).resolve().parent
 
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -39,9 +43,9 @@ def set_random_seed(seed_value=42):
 set_random_seed()
 
 # Load data
-train = pd.read_csv('TF_TS_train.csv')
-test = pd.read_csv('TF_TS_test.csv')
-valid = pd.read_csv('TF_TS_valid.csv')
+train = pd.read_csv(DATA_DIR / 'TF_TS_train.csv')
+test = pd.read_csv(DATA_DIR / 'TF_TS_test.csv')
+valid = pd.read_csv(DATA_DIR / 'TF_TS_valid.csv')
 
 # Interpolate the NaN values
 train['TS'] = train['TS'].interpolate()
