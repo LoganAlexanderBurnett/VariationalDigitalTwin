@@ -1,4 +1,10 @@
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "src" / "HTTF").exists())
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 import numpy as np
 import pandas as pd
@@ -12,10 +18,10 @@ import time
 import random
 from torchinfo import summary
 
-from data_handler import *
-from trainer import *
-from uncertainty import *
-from linear_variational import *
+from HTTF.data_handler import create_autoregressive_sequences
+from HTTF.trainer import train_model
+from HTTF.uncertainty import predict_with_uncertainty
+from HTTF.linear_variational import LinearReparameterization
 
 DATA_DIR = Path(__file__).resolve().parent
 
@@ -73,17 +79,10 @@ test_data = scaler.transform(test)
 valid_data = scaler.transform(valid)
 
 # Create sequences
-def create_sequences(data, lookback=10):
-    X, y = [], []
-    for i in range(lookback, len(data)):
-        X.append(data[i-lookback:i])  # Use the last 'lookback' time steps for prediction
-        y.append(data[i])  # The next time step is the target
-    return np.array(X), np.array(y)
-
 timesteps = 10
-Xtrain, Ytrain = create_sequences(train_data, lookback=timesteps)
-Xtest, Ytest = create_sequences(test_data, lookback=timesteps)
-Xvalid, Yvalid = create_sequences(valid_data, lookback=timesteps)
+Xtrain, Ytrain = create_autoregressive_sequences(train_data, lookback=timesteps)
+Xtest, Ytest = create_autoregressive_sequences(test_data, lookback=timesteps)
+Xvalid, Yvalid = create_autoregressive_sequences(valid_data, lookback=timesteps)
 
 # Convert to PyTorch tensors
 Xtrain_tensor = torch.tensor(Xtrain, dtype=torch.float32).to(device)
@@ -193,63 +192,6 @@ plt.legend(loc='upper right')
 plt.show()
 
 # Function to make predictions multiple times to capture uncertainty
-def predict_with_uncertainty(
-    model,
-    test_loader,
-    n_samples=100,
-    scaler_y=None,
-    device=torch.device('cpu'),
-    alpha=0.05
-):
-    """
-    Runs MC sampling through `model` to estimate uncertainty,
-    but without extra-process overhead.
-
-    Returns:
-      mean_preds: (N, K) array of predictive means
-      true_vals:  (N, K) array of ground truths
-      lower:      (N, K) lower bound at alpha/2 (default 2.5%)
-      upper:      (N, K) upper bound at 1-alpha/2 (default 97.5%)
-    """
-    model.eval()
-    all_preds = []
-    all_trues = []
-
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-
-            # collect the true values
-            all_trues.append(targets.cpu().numpy())
-
-            # do n_samples forward passes _sequentially_
-            batch_preds = []
-            for _ in range(n_samples):
-                outs, _ = model(inputs)
-                batch_preds.append(outs.cpu().numpy())
-
-            # shape (n_samples, batch, K)
-            all_preds.append(np.stack(batch_preds, axis=0))
-
-    # concatenate across batches → (n_samples, total_N, K)
-    all_preds = np.concatenate(all_preds, axis=1)
-    true_vals = np.concatenate(all_trues, axis=0)  # (total_N, K)
-
-    # inverse scaling if needed
-    if scaler_y is not None:
-        true_vals = scaler_y.inverse_transform(true_vals)
-        all_preds = np.array(
-            [scaler_y.inverse_transform(p) for p in all_preds]
-        )
-
-    # now compute stats over the sample axis
-    mean_preds = np.mean(all_preds, axis=0)   # (total_N, K)
-    lower     = np.percentile(all_preds, 100 * (alpha/2),    axis=0)
-    upper     = np.percentile(all_preds, 100 * (1-alpha/2), axis=0)
-
-    return mean_preds, true_vals, lower, upper
-
 
 n_samples = 250
 

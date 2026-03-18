@@ -14,16 +14,15 @@ import argparse
 from pathlib import Path
 import sys
 
-CURRENT_DIR = Path(__file__).resolve().parent
-SHARED_VARIATIONAL_DIR = CURRENT_DIR.parent
-STATIC_VARIATIONAL_DIR = CURRENT_DIR.parents[2] / 'static_training' / 'variational'
-for helper_dir in (STATIC_VARIATIONAL_DIR, SHARED_VARIATIONAL_DIR):
-    helper_dir_str = str(helper_dir)
-    if helper_dir_str not in sys.path:
-        sys.path.insert(0, helper_dir_str)
+PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "src" / "HTTF").exists())
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-from linear_variational import LinearReparameterization
-from uncertainty import predict_with_uncertainty
+from HTTF.data_handler import create_autoregressive_sequences
+from HTTF.linear_variational import LinearReparameterization
+from HTTF.trainer import train_model
+from HTTF.uncertainty import predict_with_uncertainty
 
 def set_random_seed(seed_value=42):
     # Python random seed
@@ -88,17 +87,10 @@ test_data = scaler.transform(test)
 valid_data = scaler.transform(valid)
 
 # Create sequences
-def create_sequences(data, lookback=10):
-    X, y = [], []
-    for i in range(lookback, len(data)):
-        X.append(data[i-lookback:i])  # Use the last 'lookback' time steps for prediction
-        y.append(data[i])  # The next time step is the target
-    return np.array(X), np.array(y)
-
 timesteps = 10
-Xtrain, Ytrain = create_sequences(train_data, lookback=timesteps)
-Xtest, Ytest = create_sequences(test_data, lookback=timesteps)
-Xvalid, Yvalid = create_sequences(valid_data, lookback=timesteps)
+Xtrain, Ytrain = create_autoregressive_sequences(train_data, lookback=timesteps)
+Xtest, Ytest = create_autoregressive_sequences(test_data, lookback=timesteps)
+Xvalid, Yvalid = create_autoregressive_sequences(valid_data, lookback=timesteps)
 
 # Convert to PyTorch tensors
 Xtrain_tensor = torch.tensor(Xtrain, dtype=torch.float32).to(device)
@@ -181,67 +173,6 @@ train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
 valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size)
 
-# Training process (with KL divergence handling)
-def train_model(model, train_loader, val_loader, num_epochs, reconstruction_loss_fn, optimizer, device=torch.device('cpu'), kl_schedule='linear'):
-    model.to(device)
-    
-    train_losses = []
-    val_losses = []
-
-    for epoch in range(num_epochs):
-        model.train()
-
-        if kl_schedule == 'linear':
-            kl_weight = epoch / num_epochs
-        elif kl_schedule == 'sigmoid_growth':
-            kl_weight = 0.05 / (1 + np.exp(-2 * (epoch - 0.7 * num_epochs))) + 0.0005 # max / (1 + e^[-rate * (epoch - frac_training_w/o_KL*num_epochs)]) + min
-        elif kl_schedule == 'sigmoid_decay':
-            kl_weight = 0.05 / (1 + np.exp(2 * (epoch - 0.15 * num_epochs))) + 0.0005
-        else: 
-            kl_weight = 1e-4
-        
-        running_train_loss = 0.0
-
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            optimizer.zero_grad()
-
-            # Forward pass
-            outputs, kl_loss = model(inputs)
-
-            # Compute the reconstruction loss
-            reconstruction_loss = reconstruction_loss_fn(outputs, targets)
-
-            # Total loss (reconstruction + KL divergence)
-            total_loss = reconstruction_loss + kl_weight * kl_loss
-
-            # Backward pass
-            total_loss.backward()
-            optimizer.step()
-
-            running_train_loss += total_loss.item()
-
-        avg_train_loss = running_train_loss / len(train_loader)
-        train_losses.append(avg_train_loss)
-
-        # Validation loop
-        model.eval()
-        running_val_loss = 0.0
-        with torch.no_grad():
-            for val_inputs, val_targets in val_loader:
-                val_inputs, val_targets = val_inputs.to(device), val_targets.to(device)
-                val_outputs, val_kl_loss = model(val_inputs)
-
-                val_reconstruction_loss = reconstruction_loss_fn(val_outputs, val_targets)
-                val_total_loss = val_reconstruction_loss + kl_weight * val_kl_loss
-                running_val_loss += val_total_loss.item()
-
-        avg_val_loss = running_val_loss / len(val_loader)
-        val_losses.append(avg_val_loss)
-
-        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, KL Weight: {kl_weight}')
-
-    return train_losses, val_losses
 
 start = time.time()
 

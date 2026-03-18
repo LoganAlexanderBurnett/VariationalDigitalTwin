@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch.nn import Parameter
 
-from base_variational_layer import BaseVariationalLayer_
+from .base_variational_layer import BaseVariationalLayer_
 
 
 class LinearReparameterization(BaseVariationalLayer_):
