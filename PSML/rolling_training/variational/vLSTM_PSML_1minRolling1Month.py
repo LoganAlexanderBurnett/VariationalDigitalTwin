@@ -13,6 +13,7 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
 from psml.linear_variational import LinearReparameterization
+from psml.models import LSTMReparameterizationModel
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
@@ -33,69 +34,6 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 2) Model definition
 # -----------------------------------------------------------------------------
-class LSTMReparameterizationModel(nn.Module):
-    def __init__(
-        self,
-        in_features,
-        hidden_size,
-        out_features,
-        num_layers,
-        prior_mean=0,
-        prior_variance=0.5,
-        posterior_rho_init=-4.0,
-        bias=True
-    ):
-        super().__init__()
-
-        # 1) Deterministic input projection
-        self.fc1 = nn.Linear(in_features, hidden_size, bias=bias)
-
-        # 2) Deterministic multi-layer LSTM
-        self.lstm = nn.LSTM(
-            input_size=hidden_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            bias=bias
-        )
-
-        # 3) Deterministic penultimate layer
-        self.fc2 = nn.Linear(hidden_size, hidden_size, bias=bias)
-
-        # 4) **Only this** is variational
-        self.fc3 = LinearReparameterization(
-            in_features=hidden_size,
-            out_features=out_features,
-            prior_mean=prior_mean,
-            prior_variance=prior_variance,
-            posterior_rho_init=posterior_rho_init,
-            bias=bias
-        )
-
-    def forward(self, x, hidden_states=None):
-        """
-        x: Tensor of shape (batch, seq_len, in_features)
-        hidden_states: either None or a tuple (h0, c0), each of shape 
-                       (num_layers, batch, hidden_size).
-        """
-
-        # 1) Deterministic linear + ReLU
-        x = self.fc1(x)          # → (batch, seq_len, hidden_size)
-        x = F.relu(x)
-
-        # 2) LSTM
-        lstm_out, (h_n, c_n) = self.lstm(x, hidden_states)
-        # h_n: (num_layers, batch, hidden_size)
-        last_hidden = h_n[-1]    # → (batch, hidden_size)
-
-        # 3) Deterministic linear + ReLU on last_hidden
-        last_hidden = self.fc2(last_hidden)
-        last_hidden = F.relu(last_hidden)
-
-        # 4) Variational output layer (unchanged)
-        output, kl = self.fc3(last_hidden)
-
-        return output, kl
 
 # -----------------------------------------------------------------------------
 # 3) Helpers

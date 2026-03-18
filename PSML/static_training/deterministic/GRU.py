@@ -10,6 +10,7 @@
 # ### 2 Linear layers, 2nd to output
 
 from psml.data_handler import *
+from psml.models import StandardGRUModel
 
 import torch
 import torch.nn as nn
@@ -48,46 +49,6 @@ set_random_seed()
 
 # ### Define Standard GRU model
 
-class StandardGRUModel(nn.Module):
-    def __init__(self, in_features, hidden_size, out_features, num_layers, bias=True):
-        super(StandardGRUModel, self).__init__()
-
-        # First Linear Layer
-        self.fc1 = nn.Linear(in_features, hidden_size, bias=bias)
-        
-        # GRU Layers (num_layers stacked GRUs)
-        self.gru = nn.GRU(input_size=hidden_size, hidden_size=hidden_size, 
-                          num_layers=num_layers, batch_first=True, bias=bias)
-
-        # Second Linear Layer
-        self.fc2 = nn.Linear(hidden_size, hidden_size, bias=bias)
-
-        # Final Output Layer
-        self.fc3 = nn.Linear(hidden_size, out_features, bias=bias)
-
-    def forward(self, x, hidden_states=None):
-        # Pass input through the first linear layer
-        x = self.fc1(x)
-        x = F.relu(x)  # Apply ReLU activation
-        
-        # Initialize hidden states if not provided
-        if hidden_states is None:
-            hidden_states = torch.zeros(self.gru.num_layers, x.size(0), self.gru.hidden_size, device=x.device)
-        
-        # Pass through GRU layers, returning the output sequence and final hidden state
-        hidden_seq, hidden_last = self.gru(x, hidden_states)
-
-        # Take the last layer’s hidden state
-        hidden_last = hidden_seq[:, -1, :]
-        
-        # Pass through second linear layer
-        hidden_last = self.fc2(hidden_last)
-        hidden_last = F.relu(hidden_last)  # Apply ReLU activation
-
-        # Pass through the final output layer
-        output = self.fc3(hidden_last)
-        
-        return output
 
 # ### Typical loading, scaling, and preparation of data
 

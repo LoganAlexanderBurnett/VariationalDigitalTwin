@@ -11,6 +11,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
+from psml.models import RollingStandardGRUModel as StandardGRUModel
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
@@ -31,25 +32,6 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 2) Model definition
 # -----------------------------------------------------------------------------
-class StandardGRUModel(nn.Module):
-    def __init__(self, in_f, h, out_f, nl):
-        super().__init__()
-        self.fc1 = nn.Linear(in_f, h)
-        self.gru = nn.GRU(h, h, num_layers=nl, batch_first=True)
-        self.fc2 = nn.Linear(h, h)
-        self.fc3 = nn.Linear(h, out_f)
-
-    def forward(self, x, hidden=None):
-        # x: (batch, seq_len, in_f)
-        x = F.relu(self.fc1(x))
-        if hidden is None:
-            hidden = torch.zeros(
-                self.gru.num_layers, x.size(0), self.gru.hidden_size,
-                device=x.device
-            )
-        seq, h_n = self.gru(x, hidden)
-        last = F.relu(self.fc2(seq[:, -1, :]))
-        return self.fc3(last), h_n
 
 # -----------------------------------------------------------------------------
 # 3) Helpers

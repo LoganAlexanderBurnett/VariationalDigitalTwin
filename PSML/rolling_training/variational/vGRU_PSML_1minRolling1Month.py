@@ -13,6 +13,7 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
 from psml.linear_variational import LinearReparameterization
+from psml.models import GRUReparameterizationModel
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
@@ -33,66 +34,6 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 2) Model definition
 # -----------------------------------------------------------------------------
-class GRUReparameterizationModel(nn.Module):
-    def __init__(
-        self,
-        in_features,
-        hidden_size,
-        out_features,
-        num_layers,
-        prior_mean=0,
-        prior_variance=1.0,
-        posterior_rho_init=-3.0,
-        bias=True
-    ):
-        super().__init__()
-
-        # 1) Deterministic input projection
-        self.fc1 = nn.Linear(in_features, hidden_size, bias=bias)
-
-        # 2) Deterministic multi-layer GRU
-        self.gru = nn.GRU(
-            input_size=hidden_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            bias=bias
-        )
-
-        # 3) Deterministic penultimate layer
-        self.fc2 = nn.Linear(hidden_size, hidden_size, bias=bias)
-
-        # 4) **Only this** is variational
-        self.fc3 = LinearReparameterization(
-            in_features=hidden_size,
-            out_features=out_features,
-            prior_mean=prior_mean,
-            prior_variance=prior_variance,
-            posterior_rho_init=posterior_rho_init,
-            bias=bias
-        )
-
-    def forward(self, x, hidden_states=None):
-        # x: (batch, seq_len, in_features)
-
-        # 1) Deterministic linear + ReLU
-        x = self.fc1(x)                 # → (batch, seq_len, hidden_size)
-        x = F.relu(x)
-
-        # 2) Deterministic GRU
-        # hidden_states (if provided) must be (num_layers, batch, hidden_size)
-        hidden_seq, h_n = self.gru(x, hidden_states)
-        # h_n: (num_layers, batch, hidden_size)
-        last_hidden = h_n[-1]           # → (batch, hidden_size)
-
-        # 3) Deterministic linear + ReLU
-        last_hidden = self.fc2(last_hidden)
-        last_hidden = F.relu(last_hidden)
-
-        # 4) Variational output layer
-        output, kl = self.fc3(last_hidden)
-
-        return output, kl
 
 # -----------------------------------------------------------------------------
 # 3) Helpers

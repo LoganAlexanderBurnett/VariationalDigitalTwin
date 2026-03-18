@@ -12,6 +12,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
+from psml.models import RollingStandardLSTMModel as StandardLSTMModel
 
 # -----------------------------------------------------------------------------
 # 1) Reproducibility & device
@@ -32,45 +33,6 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 2) Model definition
 # -----------------------------------------------------------------------------
-class StandardLSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, num_layers=1):
-        super().__init__()
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True   # or False, depending on your data layout
-        )
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, output_size)
-
-    def forward(self, x, hidden=None):
-        # x: (batch, seq_len, input_size) if batch_first=True
-        batch_size = x.size(0)
-
-        # if hidden is None:
-        #     # Create h₀ and c₀ as zeros:
-        #     h0 = torch.zeros(
-        #         self.lstm.num_layers,
-        #         batch_size,
-        #         self.lstm.hidden_size,
-        #         device=x.device
-        #     )
-        #     c0 = torch.zeros(
-        #         self.lstm.num_layers,
-        #         batch_size,
-        #         self.lstm.hidden_size,
-        #         device=x.device
-        #     )
-        #     hidden = (h0, c0)
-
-        # Now hidden is a tuple (h₀, c₀), each of shape (num_layers, batch, hidden_size).
-        seq, (h_n, c_n) = self.lstm(x, hidden)
-
-        # Take the last time-step’s features, then feed through your FC layers:
-        last = F.relu(self.fc2(seq[:, -1, :]))   # seq[:, -1, :] is shape (batch, hidden_size)
-        out = self.fc3(last)                     # shape (batch, output_size)
-        return out, (h_n, c_n)
 
 
 # -----------------------------------------------------------------------------
