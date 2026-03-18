@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,14 +11,16 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import time
 from torchinfo import summary
 
+DATA_DIR = Path(__file__).resolve().parent
+
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load data
-train = pd.read_csv('TF_TS_train.csv')
-test = pd.read_csv('TF_TS_test.csv')
-valid = pd.read_csv('TF_TS_valid.csv')
+train = pd.read_csv(DATA_DIR / 'TF_TS_train.csv')
+test = pd.read_csv(DATA_DIR / 'TF_TS_test.csv')
+valid = pd.read_csv(DATA_DIR / 'TF_TS_valid.csv')
 
 # Interpolate the NaN values
 train['TS'] = train['TS'].interpolate()
