@@ -11,6 +11,7 @@
 
 from psml.data_handler import *
 from psml.models import StandardLSTMModel
+from psml.predict import predict_deterministic
 from psml.trainer import set_random_seed, train_deterministic
 
 import torch
@@ -178,40 +179,8 @@ plt.show()
 
 # # Predict on test data (6470 'future' time steps)
 
-def predict_standard_lstm(model, test_loader, scaler_y=None, device=torch.device('cpu')):
-    model.eval()  # Set the model to evaluation mode
-    
-    all_predictions = []
-    true_values = []
-
-    # Disable gradient computation for inference
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-
-            # Store true values for comparison
-            true_values.append(targets.cpu().numpy())
-
-            # Generate predictions for each input
-            outputs = model(inputs)
-
-            # Store predictions
-            all_predictions.append(outputs.cpu().numpy())
-
-    # Concatenate predictions and true values across all batches
-    all_predictions = np.concatenate(all_predictions, axis=0)  # Shape: (total_samples, num_outputs)
-    true_values = np.concatenate(true_values, axis=0)  # Shape: (total_samples, num_outputs)
-
-    # Apply inverse scaling if scaler_y is provided
-    if scaler_y is not None:
-        true_values = scaler_y.inverse_transform(true_values)
-        all_predictions = scaler_y.inverse_transform(all_predictions)
-
-    return all_predictions, true_values
-
 # Assuming you have a test DataLoader
-test_predictions, test_actuals = predict_standard_lstm(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+test_predictions, test_actuals = predict_deterministic(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 print("Test Predictions:", test_predictions)
 print("Test Actuals:", test_actuals)
@@ -266,7 +235,7 @@ save_arrays_to_csv(test_actuals, test_predictions, 'StandardLSTMTest.csv')
 # # Predict on train
 
 # Assuming you have a test DataLoader
-train_predictions, train_actuals = predict_standard_lstm(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+train_predictions, train_actuals = predict_deterministic(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 print("Test Predictions:", train_predictions)
 print("Test Actuals:", train_actuals)

@@ -12,6 +12,7 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 from psml.data_handler import feature_label_split, create_sequences
 from psml.models import RollingStandardLSTMModel as StandardLSTMModel
+from psml.predict import plot_predictions, predict_deterministic
 from psml.trainer import set_random_seed, train_deterministic_rolling
 
 # -----------------------------------------------------------------------------
@@ -29,29 +30,6 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 3) Helpers
 # -----------------------------------------------------------------------------
-def predict_standard_lstm(model, loader, scaler_y, dev):
-    model.eval()
-    preds, trues = [], []
-    with torch.no_grad():
-        for xb, yb in loader:
-            xb = xb.to(dev)
-            p, _ = model(xb)
-            preds.append(p.cpu().numpy())
-            trues.append(yb.numpy())
-    preds = np.concatenate(preds, axis=0)
-    trues = np.concatenate(trues, axis=0)
-    return scaler_y.inverse_transform(preds), scaler_y.inverse_transform(trues)
-
-def plot_predictions(preds, trues, title, labels=['Solar','Wind'], n_display=500):
-    N = min(len(preds), n_display)
-    x = np.arange(N)
-    for i, lab in enumerate(labels):
-        plt.figure(figsize=(8,2.5))
-        plt.plot(x, trues[:N,i], label='Actual')
-        plt.plot(x, preds[:N,i], '--', label='Predicted')
-        plt.title(f"{title} — {lab}")
-        plt.legend(); plt.tight_layout(); plt.show()
-
 def sym_mean_absolute_percentage_error(actual, predicted):
     return np.mean(
         np.abs(actual - predicted) / ((np.abs(actual) + np.abs(predicted)) / 2)
@@ -166,7 +144,7 @@ while test_end <= n_samples:
     # test & store metrics
     print(f" Testing on samples [{test_start}:{test_end}]")
     start_infer = time.time()
-    preds, trues = predict_standard_lstm(model, test_loader, scaler_y, device)
+    preds, trues = predict_deterministic(model, test_loader, scaler_y, device)
     end_infer = time.time()
     infer_time = end_infer - start_infer
     inference_time.append(infer_time)

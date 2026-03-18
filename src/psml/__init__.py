@@ -8,6 +8,7 @@ from .models import (
     StandardGRUModel,
     StandardLSTMModel,
 )
+from .predict import calculate_and_display_metrics, plot_predictions, predict_deterministic, predict_with_uncertainty
 from .trainer import (
     set_random_seed,
     train_deterministic,
@@ -15,12 +16,6 @@ from .trainer import (
     train_model,
     train_variational,
 )
-from .uncertainty import (
-    calculate_and_display_metrics,
-    plot_predictions,
-    predict_with_uncertainty,
-)
-
 __all__ = [
     "calculate_and_display_metrics",
     "create_sequences",
@@ -29,6 +24,7 @@ __all__ = [
     "LinearReparameterization",
     "LSTMReparameterizationModel",
     "plot_predictions",
+    "predict_deterministic",
     "predict_with_uncertainty",
     "RollingStandardGRUModel",
     "RollingStandardLSTMModel",

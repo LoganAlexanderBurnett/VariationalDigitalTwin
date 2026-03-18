@@ -12,7 +12,7 @@
 
 from psml.data_handler import *
 from psml.trainer import *
-from psml.uncertainty import *
+from psml.predict import *
 from psml.linear_variational import *
 from psml.models import LSTMReparameterizationModel
 

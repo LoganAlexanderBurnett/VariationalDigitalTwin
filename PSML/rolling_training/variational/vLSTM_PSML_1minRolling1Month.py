@@ -13,6 +13,7 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from psml.data_handler import feature_label_split, create_sequences
 from psml.linear_variational import LinearReparameterization
 from psml.models import LSTMReparameterizationModel
+from psml.predict import plot_predictions, predict_with_uncertainty
 from psml.trainer import set_random_seed, train_variational
 
 # -----------------------------------------------------------------------------
@@ -29,109 +30,6 @@ print("Device:", device)
 # -----------------------------------------------------------------------------
 # 3) Helpers
 # -----------------------------------------------------------------------------
-
-
-from joblib import Parallel, delayed
-
-def predict_with_uncertainty(
-    model,
-    test_loader,
-    n_samples=100,
-    scaler_y=None,
-    device=torch.device('cpu'),
-    n_jobs=4,
-    alpha=0.05
-):
-    """
-    Runs MC sampling through `model` to estimate uncertainty.
-    
-    Returns:
-      mean_preds: (N, K) array of predictive means
-      true_vals:  (N, K) array of ground truths
-      lower:      (N, K) lower bound at alpha/2 (default 2.5%)
-      upper:      (N, K) upper bound at 1-alpha/2 (default 97.5%)
-    """
-    model.eval()
-    all_preds = []
-    all_trues = []
-    
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-            all_trues.append(targets.cpu().numpy())
-            
-            # sample forward passes in parallel
-            def sample_once():
-                outs, _ = model(inputs)
-                return outs.detach().cpu().numpy()
-            
-            batch_preds = Parallel(n_jobs=n_jobs)(
-                delayed(sample_once)() for _ in range(n_samples)
-            )  # list of (batch, K) arrays
-            
-            # stack into shape (n_samples, batch, K)
-            all_preds.append(np.stack(batch_preds, axis=0))
-    
-    # stack across batches → (n_samples, total_N, K)
-    all_preds = np.concatenate(all_preds, axis=1)
-    true_vals = np.concatenate(all_trues, axis=0)  # (total_N, K)
-    
-    # inverse-transform if needed
-    if scaler_y is not None:
-        true_vals = scaler_y.inverse_transform(true_vals)
-        all_preds = np.array([scaler_y.inverse_transform(p) for p in all_preds])
-    
-    # compute statistics over the sample axis
-    mean_preds = np.mean(all_preds, axis=0)  # (total_N, K)
-    lower = np.percentile(all_preds, 100 * (alpha/2), axis=0)
-    upper = np.percentile(all_preds, 100 * (1 - alpha/2), axis=0)
-    
-    return mean_preds, true_vals, lower, upper
-
-
-def plot_predictions(
-    preds,
-    trues,
-    title,
-    labels=['Solar','Wind'],
-    n_display=500,
-    lower=None,
-    upper=None
-):
-    """
-    preds:        (T, K) array of predictive means
-    trues:        (T, K) array of ground‐truths
-    lower, upper: optional (T, K) arrays of UQ bounds (e.g. 2.5% and 97.5% quantiles)
-    """
-    N = min(len(preds), n_display)
-    x = np.arange(N)
-
-    for i, lab in enumerate(labels):
-        plt.figure(figsize=(16,6))
-        # actual vs mean
-        plt.plot(x, trues[:N, i], 'k',      label='Actual')
-        plt.plot(x, preds[:N, i], 'r--', label='Predicted')
-
-        # fill the UQ band if provided
-        if lower is not None and upper is not None:
-            plt.fill_between(
-                x,
-                lower[:N, i],
-                upper[:N, i],
-                alpha=0.3,
-                color='r',
-                label='95% CI'
-            )
-
-        plt.xlabel('Time (minutes)')
-        plt.ylabel(lab)
-        plt.xlim(0,10_000)
-        plt.grid()
-        plt.title(f"{title} — {lab}")
-        plt.legend(loc='upper right')
-        plt.tight_layout()
-        plt.show()
 
 
 # -----------------------------------------------------------------------------
