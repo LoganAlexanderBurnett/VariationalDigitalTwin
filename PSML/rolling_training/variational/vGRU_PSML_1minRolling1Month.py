@@ -1,262 +1,426 @@
+from pathlib import Path
+import json
+
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.utils.data import DataLoader, Subset, TensorDataset
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import time
 
-from torch.utils.data import TensorDataset, DataLoader, Subset
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
-from psml.data_handler import feature_label_split, create_sequences
-from psml.linear_variational import LinearReparameterization
+from psml.data_handler import create_sequences, feature_label_split
 from psml.models import GRUReparameterizationModel
 from psml.predict import plot_predictions, predict_with_uncertainty
 from psml.trainer import set_random_seed, train_variational
 
-# -----------------------------------------------------------------------------
-# 1) Reproducibility & device
-# -----------------------------------------------------------------------------
-set_random_seed()
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print("Device:", device)
 
 # -----------------------------------------------------------------------------
-# 2) Model definition
+# Configuration
 # -----------------------------------------------------------------------------
+DATA_PATH = '../../dataset/PSML.csv'
+OUTPUT_ROOT = Path('vgru_rolling_session_outputs')
 
-# -----------------------------------------------------------------------------
-# 3) Helpers
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# 4) Load & preprocess full dataset
-# -----------------------------------------------------------------------------
-df = pd.read_csv('../../dataset/PSML.csv', parse_dates=['time'])
-df.set_index('time', inplace=True)
-df1 = df.fillna(method='ffill').fillna(method='bfill')
+TARGET_COLUMNS = ['solar_power', 'wind_power']
+DROP_COLUMNS = ['load_power']
 
-# features & targets
-X, y = feature_label_split(df1,
-    targets=['solar_power','wind_power'],
-    drop_cols=['load_power']
-)
+SEQ_LEN = 12
+TRAIN_WINDOW = 43_800
+TEST_WINDOW = 43_800
 
-# scaling
-scaler_X = MinMaxScaler()
-scaler_y = MinMaxScaler()
+HIDDEN_SIZE = 35
+NUM_LAYERS = 1
+LEARNING_RATE = 1e-3
+EPOCHS = 50
+BATCH_SIZE = 512
 
-X_arr = scaler_X.fit_transform(X)
-y_arr = scaler_y.fit_transform(y)
+PRIOR_MEAN = 0.0
+PRIOR_VARIANCE = 0.5
+POSTERIOR_RHO_INIT = -4.0
+BIAS = True
 
-# build sequences
-seq_len = 12
-X_seq, y_seq = create_sequences(
-    torch.tensor(X_arr, dtype=torch.float32),
-    torch.tensor(y_arr, dtype=torch.float32),
-    seq_len
-)
+UNCERTAINTY_SAMPLES = 100
+UNCERTAINTY_ALPHA = 0.05
+UNCERTAINTY_N_JOBS = 4
+LOG_EVERY = 10
 
-# full sequence dataset
-train_ds = TensorDataset(X_seq, y_seq)
-n_samples = len(train_ds)
-print(f"Total sequence samples: {n_samples}")
 
 # -----------------------------------------------------------------------------
-# 5) Session window definitions
+# Utility functions
 # -----------------------------------------------------------------------------
-train_window = 43_800    # first session training size,1 month
-test_window  = 43_800     # each session test size, 1 month
+def sym_mean_absolute_percentage_error(actual, predicted):
+    denominator = (np.abs(actual) + np.abs(predicted)) / 2
+    denominator = np.where(denominator == 0, 1e-12, denominator)
+    return np.mean(np.abs(actual - predicted) / denominator) * 100
 
-# hyperparameters
-in_f    = X_seq.size(-1)
-out_f   = y_seq.size(-1)
-hidden  = 35
-n_layers= 1
-lr      = 1e-3
-epochs  = 50
-batch_size = 512
-loss_fn = nn.MSELoss()
-samples = 100
 
-# metrics storage
-session_nums      = []
-training_time     = []
-inference_time    = []
-r2_solar_list     = []
-r2_wind_list      = []
-mae_solar_list    = []
-mae_wind_list     = []
-rmse_solar_list   = []
-rmse_wind_list    = []
-r2_list      = []
-mae_list     = []
-rmse_list    = []
 
-# -----------------------------------------------------------------------------
-# 6) Rolling train/test sessions (probabilistic GRU)
-# -----------------------------------------------------------------------------
-session      = 0
-train_start  = 0
-train_end    = train_window
-test_start   = train_end
-test_end     = test_start + test_window
-
-while test_end <= n_samples:
-    print(f"\n=== Session {session} ===")
-    # define indices
-    train_idx = list(range(train_start, train_end))
-    test_idx  = list(range(test_start, test_end))
-
-    # loaders
-    train_loader = DataLoader(
-        Subset(train_ds, train_idx),
-        batch_size=batch_size, shuffle=False, drop_last=True
-    )
-    test_loader = DataLoader(
-        Subset(train_ds, test_idx),
-        batch_size=batch_size, shuffle=False, drop_last=True
-    )
-
-    # model setup
-    if session == 0:
-        model = GRUReparameterizationModel(
-            in_features=in_f,
-            hidden_size=hidden,
-            out_features=out_f,
-            num_layers=n_layers,
-            prior_mean=0,
-            prior_variance=0.5,
-            posterior_rho_init=-4.0,
-            bias=True
-        ).to(device)
-    else:
-        model.load_state_dict(
-            torch.load(f"prob_gru_session{session-1}.pth", map_location=device)
-        )
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
-    # train (assumes your train_gru handles the KL term returned by the variational model)
-    print(f" Training on samples [{train_start}:{train_end}]")
-    start = time.time()
-    train_variational(model, train_loader, optimizer, loss_fn, epochs, device=device, log_every=10, return_history=False)
-    end = time.time()
-    train_time = end-start
-    training_time.append(train_time)
-    print(f"Training took {train_time:.2f}s")
-    
-    # test & store metrics
-    print(f" Testing on samples [{test_start}:{test_end}]")
-    start = time.time()
-    mean_preds, trues, lower, upper = predict_with_uncertainty(
-        model,
-        test_loader,
-        n_samples=samples,
-        scaler_y=scaler_y,
-        device=device,
-        n_jobs=4,
-        alpha=0.05
-    )
-    end = time.time()
-    predict_time = end-start
-    inference_time.append(predict_time)
-    print(f"Inference took {predict_time:.2f}")
-
+def save_prediction_plot(mean_predictions, targets, lower, upper, labels, title, save_path, n_display):
     plot_predictions(
-        preds=mean_preds,
-        trues=trues,
-        title=f"Session {session} Test Set",
-        labels=['Solar','Wind'],
-        n_display=test_window,
+        preds=mean_predictions,
+        trues=targets,
+        title=title,
+        labels=labels,
+        n_display=min(n_display, len(mean_predictions)),
         lower=lower,
-        upper=upper
+        upper=upper,
     )
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close('all')
 
-    # compute per-output metrics on the MEAN predictions
-    r2_vals    = [r2_score(trues[:,i], mean_preds[:,i]) for i in range(out_f)]
-    mae_vals   = [mean_absolute_error(trues[:,i], mean_preds[:,i]) for i in range(out_f)]
-    rmse_vals  = [mean_squared_error(trues[:,i], mean_preds[:,i], squared=False) for i in range(out_f)]
-    print(f"  R2   : {r2_vals}")
-    print(f"  MAE  : {mae_vals}")
-    print(f"  RMSE : {rmse_vals}")
 
-    # append metrics
-    session_nums.append(session)
-    r2_solar_list .append(r2_vals[0])
-    r2_wind_list  .append(r2_vals[1])
-    mae_solar_list.append(mae_vals[0])
-    mae_wind_list .append(mae_vals[1])
-    rmse_solar_list.append(rmse_vals[0])
-    rmse_wind_list .append(rmse_vals[1])
-    r2_list.append(np.mean(r2_vals))
-    mae_list.append(np.mean(mae_vals))
-    rmse_list.append(np.mean(rmse_vals))
 
-    # save probabilistic model state
-    torch.save(model.state_dict(), f"prob_gru_session{session}.pth")
+def save_session_predictions(mean_predictions, targets, lower, upper, target_names, save_path):
+    df_out = pd.DataFrame()
+    for i, name in enumerate(target_names):
+        df_out[f'true_{name}'] = targets[:, i]
+        df_out[f'pred_{name}'] = mean_predictions[:, i]
+        df_out[f'lower_{name}'] = lower[:, i]
+        df_out[f'upper_{name}'] = upper[:, i]
+    df_out.to_csv(save_path, index=False)
 
-    # advance windows
-    train_start = test_start
-    train_end   = test_end
-    test_start  = train_end
-    test_end    = test_start + test_window
-    session    += 1
 
-# -----------------------------------------------------------------------------
-# 7) Plot metrics vs. session
-# -----------------------------------------------------------------------------
-def plot_metric(session_nums, solar_vals, wind_vals, ylabel, title):
-    plt.figure(figsize=(8,4))
-    plt.plot(session_nums, solar_vals, 'o-', label='Solar')
-    plt.plot(session_nums, wind_vals,  'x--', label='Wind')
+
+def compute_metrics(mean_predictions, targets, target_names):
+    n_outputs = targets.shape[1]
+
+    r2_vals = [r2_score(targets[:, i], mean_predictions[:, i]) for i in range(n_outputs)]
+    mae_vals = [mean_absolute_error(targets[:, i], mean_predictions[:, i]) for i in range(n_outputs)]
+    rmse_vals = [np.sqrt(mean_squared_error(targets[:, i], mean_predictions[:, i])) for i in range(n_outputs)]
+    smape_vals = [sym_mean_absolute_percentage_error(targets[:, i], mean_predictions[:, i]) for i in range(n_outputs)]
+
+    metrics = {
+        'r2': {target_names[i]: float(r2_vals[i]) for i in range(n_outputs)},
+        'mae': {target_names[i]: float(mae_vals[i]) for i in range(n_outputs)},
+        'rmse': {target_names[i]: float(rmse_vals[i]) for i in range(n_outputs)},
+        'smape': {target_names[i]: float(smape_vals[i]) for i in range(n_outputs)},
+        'avg_r2': float(np.mean(r2_vals)),
+        'avg_mae': float(np.mean(mae_vals)),
+        'avg_rmse': float(np.mean(rmse_vals)),
+        'avg_smape': float(np.mean(smape_vals)),
+    }
+    return metrics
+
+
+
+def save_metrics(metrics, save_path):
+    with open(save_path, 'w', encoding='utf-8') as f:
+        json.dump(metrics, f, indent=2)
+
+
+
+def plot_two_output_metric(session_nums, output_1_vals, output_2_vals, ylabel, title, label_1, label_2, save_path):
+    plt.figure(figsize=(8, 4))
+    plt.plot(session_nums, output_1_vals, 'o-', label=label_1)
+    plt.plot(session_nums, output_2_vals, 'x--', label=label_2)
     plt.title(title)
     plt.xlabel('Session')
     plt.ylabel(ylabel)
     plt.legend()
     plt.grid(True)
-    plt.show()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
 
-plot_metric(session_nums, r2_solar_list,    r2_wind_list,    'R²',    'R² by Session & Output')
-plot_metric(session_nums, mae_solar_list,   mae_wind_list,   'MAE',   'MAE by Session & Output')
-plot_metric(session_nums, rmse_solar_list,  rmse_wind_list,  'RMSE',  'RMSE by Session & Output')
 
-plt.figure(figsize=(8,4))
-plt.plot(session_nums, r2_list, marker='o')
-plt.title('Average R² vs. Session')
-plt.xlabel('Session')
-plt.ylabel('Avg R²')
-plt.grid(True)
-plt.show()
 
-plt.figure(figsize=(8,4))
-plt.plot(session_nums, mae_list, marker='o')
-plt.title('Average MAE vs. Session')
-plt.xlabel('Session')
-plt.ylabel('Avg MAE')
-plt.grid(True)
-plt.show()
+def plot_single_metric(session_nums, values, ylabel, title, save_path):
+    plt.figure(figsize=(8, 4))
+    plt.plot(session_nums, values, marker='o')
+    plt.title(title)
+    plt.xlabel('Session')
+    plt.ylabel(ylabel)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
 
-plt.figure(figsize=(8,4))
-plt.plot(session_nums, rmse_list, marker='o')
-plt.title('Average RMSE vs. Session')
-plt.xlabel('Session')
-plt.ylabel('Avg RMSE')
-plt.grid(True)
-plt.show()
 
-np.savez(
-    "vgru_rolling_metrics.npz",
-    session_nums=np.array(session_nums),
-    training_times=np.array(training_time),
-    inference_times=np.array(inference_time),
-    r2_solar=np.array(r2_solar_list),
-    r2_wind=np.array(r2_wind_list),
-    mae_solar=np.array(mae_solar_list),
-    mae_wind=np.array(mae_wind_list),
-    rmse_solar=np.array(rmse_solar_list),
-    rmse_wind=np.array(rmse_wind_list),
-)
+# -----------------------------------------------------------------------------
+# Main workflow
+# -----------------------------------------------------------------------------
+def main():
+    set_random_seed()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('Device:', device)
 
-print("Saved metrics.npz with all lists.")
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+    loss_fn = nn.MSELoss()
+
+    # Load and preprocess data
+    df = pd.read_csv(DATA_PATH, parse_dates=['time'])
+    df.set_index('time', inplace=True)
+    df = df.ffill().bfill()
+
+    X, y = feature_label_split(
+        df,
+        targets=TARGET_COLUMNS,
+        drop_cols=DROP_COLUMNS,
+    )
+    target_names = list(y.columns)
+    target_labels = [name.replace('_', ' ').title() for name in target_names]
+
+    scaler_X = MinMaxScaler()
+    scaler_y = MinMaxScaler()
+
+    X_arr = scaler_X.fit_transform(X)
+    y_arr = scaler_y.fit_transform(y)
+
+    X_seq, y_seq = create_sequences(
+        torch.tensor(X_arr, dtype=torch.float32),
+        torch.tensor(y_arr, dtype=torch.float32),
+        SEQ_LEN,
+    )
+
+    dataset = TensorDataset(X_seq, y_seq)
+    n_samples = len(dataset)
+    print(f'Total sequence samples: {n_samples}')
+
+    input_size = X_seq.size(-1)
+    output_size = y_seq.size(-1)
+
+    session_nums = []
+    r2_output_1 = []
+    r2_output_2 = []
+    mae_output_1 = []
+    mae_output_2 = []
+    rmse_output_1 = []
+    rmse_output_2 = []
+    avg_r2 = []
+    avg_mae = []
+    avg_rmse = []
+    avg_smape = []
+
+    session = 0
+    train_start = 0
+    train_end = TRAIN_WINDOW
+    test_start = train_end
+    test_end = test_start + TEST_WINDOW
+
+    while test_end <= n_samples:
+        session_dir = OUTPUT_ROOT / f'session_{session:03d}'
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f'\n=== Session {session} ===')
+        print(f' Training on samples [{train_start}:{train_end}]')
+
+        train_indices = list(range(train_start, train_end))
+        test_indices = list(range(test_start, test_end))
+
+        train_loader = DataLoader(
+            Subset(dataset, train_indices),
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            drop_last=True,
+        )
+        test_loader = DataLoader(
+            Subset(dataset, test_indices),
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            drop_last=True,
+        )
+
+        model = GRUReparameterizationModel(
+            in_features=input_size,
+            hidden_size=HIDDEN_SIZE,
+            out_features=output_size,
+            num_layers=NUM_LAYERS,
+            prior_mean=PRIOR_MEAN,
+            prior_variance=PRIOR_VARIANCE,
+            posterior_rho_init=POSTERIOR_RHO_INIT,
+            bias=BIAS,
+        ).to(device)
+        if session > 0:
+            previous_model_path = OUTPUT_ROOT / f'session_{session - 1:03d}' / 'vgru_model.pth'
+            model.load_state_dict(torch.load(previous_model_path, map_location=device))
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+        train_variational(
+            model,
+            train_loader,
+            optimizer,
+            loss_fn,
+            EPOCHS,
+            device=device,
+            log_every=LOG_EVERY,
+            return_history=False,
+        )
+
+        print(f' Testing on samples [{test_start}:{test_end}]')
+        mean_predictions, targets, lower, upper = predict_with_uncertainty(
+            model,
+            test_loader,
+            n_samples=UNCERTAINTY_SAMPLES,
+            scaler_y=scaler_y,
+            device=device,
+            n_jobs=UNCERTAINTY_N_JOBS,
+            alpha=UNCERTAINTY_ALPHA,
+        )
+
+        save_prediction_plot(
+            mean_predictions=mean_predictions,
+            targets=targets,
+            lower=lower,
+            upper=upper,
+            labels=target_labels,
+            title=f'Session {session} Test Set',
+            save_path=session_dir / 'test_predictions.png',
+            n_display=TEST_WINDOW,
+        )
+
+        metrics = compute_metrics(mean_predictions, targets, target_names)
+        metrics.update({
+            'session': session,
+            'train_start': train_start,
+            'train_end': train_end,
+            'test_start': test_start,
+            'test_end': test_end,
+        })
+
+        print(f"  R2   : {[metrics['r2'][name] for name in target_names]}")
+        print(f"  MAE  : {[metrics['mae'][name] for name in target_names]}")
+        print(f"  RMSE : {[metrics['rmse'][name] for name in target_names]}")
+        print(f"  SMAPE: {[metrics['smape'][name] for name in target_names]}")
+
+        save_session_predictions(
+            mean_predictions=mean_predictions,
+            targets=targets,
+            lower=lower,
+            upper=upper,
+            target_names=target_names,
+            save_path=session_dir / 'predictions.csv',
+        )
+        save_metrics(metrics, session_dir / 'metrics.json')
+        torch.save(model.state_dict(), session_dir / 'vgru_model.pth')
+
+        session_nums.append(session)
+        r2_output_1.append(metrics['r2'][target_names[0]])
+        r2_output_2.append(metrics['r2'][target_names[1]])
+        mae_output_1.append(metrics['mae'][target_names[0]])
+        mae_output_2.append(metrics['mae'][target_names[1]])
+        rmse_output_1.append(metrics['rmse'][target_names[0]])
+        rmse_output_2.append(metrics['rmse'][target_names[1]])
+        avg_r2.append(metrics['avg_r2'])
+        avg_mae.append(metrics['avg_mae'])
+        avg_rmse.append(metrics['avg_rmse'])
+        avg_smape.append(metrics['avg_smape'])
+
+        train_start = test_start
+        train_end = test_end
+        test_start = train_end
+        test_end = test_start + TEST_WINDOW
+        session += 1
+
+    plot_two_output_metric(
+        session_nums,
+        r2_output_1,
+        r2_output_2,
+        'R²',
+        'R² by Session & Output',
+        target_labels[0],
+        target_labels[1],
+        OUTPUT_ROOT / 'r2_by_session.png',
+    )
+    plot_two_output_metric(
+        session_nums,
+        mae_output_1,
+        mae_output_2,
+        'MAE',
+        'MAE by Session & Output',
+        target_labels[0],
+        target_labels[1],
+        OUTPUT_ROOT / 'mae_by_session.png',
+    )
+    plot_two_output_metric(
+        session_nums,
+        rmse_output_1,
+        rmse_output_2,
+        'RMSE',
+        'RMSE by Session & Output',
+        target_labels[0],
+        target_labels[1],
+        OUTPUT_ROOT / 'rmse_by_session.png',
+    )
+
+    plot_single_metric(
+        session_nums,
+        avg_r2,
+        'Average R²',
+        'Average R² vs. Session',
+        OUTPUT_ROOT / 'avg_r2_by_session.png',
+    )
+    plot_single_metric(
+        session_nums,
+        avg_mae,
+        'Average MAE',
+        'Average MAE vs. Session',
+        OUTPUT_ROOT / 'avg_mae_by_session.png',
+    )
+    plot_single_metric(
+        session_nums,
+        avg_rmse,
+        'Average RMSE',
+        'Average RMSE vs. Session',
+        OUTPUT_ROOT / 'avg_rmse_by_session.png',
+    )
+    plot_single_metric(
+        session_nums,
+        avg_smape,
+        'Average SMAPE',
+        'Average SMAPE vs. Session',
+        OUTPUT_ROOT / 'avg_smape_by_session.png',
+    )
+
+    summary_df = pd.DataFrame({
+        'session': session_nums,
+        f'r2_{target_names[0]}': r2_output_1,
+        f'r2_{target_names[1]}': r2_output_2,
+        f'mae_{target_names[0]}': mae_output_1,
+        f'mae_{target_names[1]}': mae_output_2,
+        f'rmse_{target_names[0]}': rmse_output_1,
+        f'rmse_{target_names[1]}': rmse_output_2,
+        'avg_r2': avg_r2,
+        'avg_mae': avg_mae,
+        'avg_rmse': avg_rmse,
+        'avg_smape': avg_smape,
+    })
+    summary_df.to_csv(OUTPUT_ROOT / 'session_metrics_summary.csv', index=False)
+
+    config = {
+        'data_path': DATA_PATH,
+        'output_root': str(OUTPUT_ROOT),
+        'targets': TARGET_COLUMNS,
+        'dropped_columns': DROP_COLUMNS,
+        'seq_len': SEQ_LEN,
+        'train_window': TRAIN_WINDOW,
+        'test_window': TEST_WINDOW,
+        'hidden_size': HIDDEN_SIZE,
+        'num_layers': NUM_LAYERS,
+        'learning_rate': LEARNING_RATE,
+        'epochs': EPOCHS,
+        'batch_size': BATCH_SIZE,
+        'prior_mean': PRIOR_MEAN,
+        'prior_variance': PRIOR_VARIANCE,
+        'posterior_rho_init': POSTERIOR_RHO_INIT,
+        'bias': BIAS,
+        'uncertainty_samples': UNCERTAINTY_SAMPLES,
+        'uncertainty_alpha': UNCERTAINTY_ALPHA,
+        'uncertainty_n_jobs': UNCERTAINTY_N_JOBS,
+        'log_every': LOG_EVERY,
+        'device': str(device),
+        'total_sequence_samples': int(n_samples),
+        'num_sessions': int(len(session_nums)),
+    }
+    save_metrics(config, OUTPUT_ROOT / 'run_config.json')
+
+
+if __name__ == '__main__':
+    main()

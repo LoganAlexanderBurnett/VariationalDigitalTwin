@@ -1,13 +1,13 @@
-# # LSTM forecasting of renewable energy grid production
-# ## - Take mean of every 10 timesteps
-# ## - 32,500 timesteps = 325,000 minutes = ~225.7 days: 60% training, 20% validation, 20% test
-# ## - Lookback = 12 timesteps = 2hr
-# ## - lr = 0.001, hidden_size = 35, num_epochs = 50, batch_size = 512
+# LSTM forecasting of renewable energy grid production
+## - Take mean of every 10 timesteps
+## - 32,500 timesteps = 325,000 minutes = ~225.7 days: 60% training, 20% validation, 20% test
+## - Lookback = 12 timesteps = 2hr
+## - lr = 0.001, hidden_size = 35, num_epochs = 50, batch_size = 512
 #
-# ## Model Architecture
-# ### 1 Linear input layer
-# ### 1 LSTM
-# ### 2 Linear layers, 2nd to output
+## Model Architecture
+# 1 Linear input layer
+# 1 LSTM
+# 2 Linear layers, 2nd to output
 
 from psml.data_handler import *
 from psml.models import StandardLSTMModel
@@ -26,19 +26,19 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, MaxAbsScaler, RobustScaler
 from torch.utils.data import TensorDataset, DataLoader
 
-# ### Set seed
+# Set seed
 
 set_random_seed()
 
-# ### Define Standard LSTM model
+# Define Standard LSTM model
 
 
-# ### Typical loading, scaling, and preparation of data
+# Typical loading, scaling, and preparation of data
 
 #-----------------------------------------------LOAD DATA---------------------------------------------------------#
 df = pd.read_csv('../../dataset/PSML.csv', parse_dates=['time'])
 df.set_index('time', inplace=True)
-df1 = df.fillna(method='ffill').fillna(method='bfill')
+df1 = df.ffill().bfill()
 print(df1.shape)
 
 columns = df1.columns
@@ -54,7 +54,9 @@ data
 X, y = feature_label_split(data, targets=['solar_power', 'wind_power'], drop_cols=['load_power'])
 
 # Split data
-X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, train_fraction=0.20, validation_fraction=0.20, test_fraction=0.60)
+#X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, train_fraction=0.20, validation_fraction=0.20, test_fraction=0.60)
+X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, 0.2, 0.2, 0.6)
+
 
 # Scaling
 scaler_X = MinMaxScaler()
@@ -106,7 +108,7 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
     # Break after inspecting the first batch
     break
 
-# ### Instantiate and train LSTM model
+# Instantiate and train LSTM model
 
 # Hyperparameters from GridSearch
 input_size = 8  # Number of input features
@@ -177,7 +179,7 @@ inset_ax.plot(range(len(val_losses) - last_epochs, len(val_losses)), val_losses[
 
 plt.show()
 
-# # Predict on test data (6470 'future' time steps)
+# Predict on test data (6470 'future' time steps)
 
 # Assuming you have a test DataLoader
 test_predictions, test_actuals = predict_deterministic(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
@@ -196,7 +198,7 @@ plot_predictions(
     n_display=1300,
 )
 
-# # Calculate R2, MAE, RMSE
+# Calculate R2, MAE, RMSE
 
 # Number of outputs
 n_outputs = test_actuals.shape[1]
@@ -226,7 +228,7 @@ def save_arrays_to_csv(array1: np.ndarray, array2: np.ndarray, filename: str):
 
 save_arrays_to_csv(test_actuals, test_predictions, 'StandardLSTMTest.csv')
 
-# # Predict on train
+# Predict on train
 
 # Assuming you have a test DataLoader
 train_predictions, train_actuals = predict_deterministic(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))

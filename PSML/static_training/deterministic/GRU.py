@@ -26,19 +26,19 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, MaxAbsScaler, RobustScaler
 from torch.utils.data import TensorDataset, DataLoader
 
-# ### Set seed
+# Set seed
 
 set_random_seed()
 
-# ### Define Standard GRU model
+# Define Standard GRU model
 
 
-# ### Typical loading, scaling, and preparation of data
+# Typical loading, scaling, and preparation of data
 
 #-----------------------------------------------LOAD DATA---------------------------------------------------------#
 df = pd.read_csv('../../dataset/PSML.csv', parse_dates=['time'])
 df.set_index('time', inplace=True)
-df1 = df.fillna(method='ffill').fillna(method='bfill')
+df1 = df.ffill().bfill()
 print(df1.shape)
 
 columns = df1.columns
@@ -54,7 +54,7 @@ data
 X, y = feature_label_split(data, targets=['solar_power', 'wind_power'], drop_cols=['load_power'])
 
 # Split data
-X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, train_fraction=0.80, validation_fraction=0.10, test_fraction=0.10)
+X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, 0.80, 0.10, 0.10)
 
 # Scaling
 scaler_X = MinMaxScaler()
@@ -106,7 +106,7 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
     # Break after inspecting the first batch
     break
 
-# ### Instantiate and train GRU model
+# Instantiate and train GRU model
 
 # Hyperparameters from GridSearch
 num_layers = 1
@@ -170,14 +170,12 @@ inset_ax = inset_axes(ax, width="40%", height="40%", loc="center right")  # Adju
 inset_ax.plot(range(len(train_losses) - last_epochs, len(train_losses)), train_losses[-last_epochs:], label="Training Loss")
 inset_ax.plot(range(len(val_losses) - last_epochs, len(val_losses)), val_losses[-last_epochs:], label="Validation Loss")
 
-# Save the figure (use any desired file path and format)
+# Save the figure
 # plt.savefig("GRU_train_val_loss.png", dpi=300, bbox_inches='tight')
 
 plt.show()
 
-# # Predict on test data
-
-# Assuming you have a test DataLoader
+# Predict on test data
 start = time.time()
 test_predictions, test_actuals = predict_deterministic(model, test_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 end = time.time()
@@ -195,7 +193,7 @@ plot_predictions(
     labels=labels,
 )
 
-# # Calculate R2, MAE, RMSE
+# Calculate R2, MAE, RMSE
 
 # Number of outputs
 n_outputs = test_actuals.shape[1]
@@ -225,9 +223,7 @@ def save_arrays_to_csv(array1: np.ndarray, array2: np.ndarray, filename: str):
 
 save_arrays_to_csv(test_actuals, test_predictions, 'StandardGRUTest.csv')
 
-# # Predict on train
-
-# Assuming you have a test DataLoader
+# Predict on train
 train_predictions, train_actuals = predict_deterministic(model, train_loader, scaler_y=scaler_y, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 print("Test Predictions:", train_predictions)

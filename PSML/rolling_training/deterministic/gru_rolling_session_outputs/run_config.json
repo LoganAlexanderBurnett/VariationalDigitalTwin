@@ -1,0 +1,22 @@
+{
+  "data_path": "../../dataset/PSML.csv",
+  "output_root": "rolling_session_outputs",
+  "targets": [
+    "solar_power",
+    "wind_power"
+  ],
+  "dropped_columns": [
+    "load_power"
+  ],
+  "seq_len": 12,
+  "train_window": 43800,
+  "test_window": 43800,
+  "hidden_size": 35,
+  "num_layers": 1,
+  "learning_rate": 0.001,
+  "epochs": 50,
+  "batch_size": 512,
+  "device": "cuda",
+  "total_sequence_samples": 1573911,
+  "num_sessions": 34
+}

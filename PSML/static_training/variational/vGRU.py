@@ -35,7 +35,7 @@ print(device)
 df = pd.read_csv('../../dataset/PSML.csv', parse_dates=['time'])
 print(df.shape)
 df.set_index('time', inplace=True)
-df1 = df.fillna(method='ffill').fillna(method='bfill')
+df1 = df.ffill().bfill()
 
 #---------------------------------SPLIT, SCALE, AND CONVERT TO NP ARRAYS---------------------------------------#
 
@@ -43,7 +43,8 @@ df1 = df.fillna(method='ffill').fillna(method='bfill')
 X, y = feature_label_split(df1, targets=['solar_power', 'wind_power'], drop_cols=['load_power'])  # Predicting renewable energy production, not overall grid demand
 
 # Split data
-X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, train_fraction=0.20, validation_fraction=0.20, test_fraction=0.60)
+#X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, train_fraction=0.20, validation_fraction=0.20, test_fraction=0.60)
+X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, 0.2, 0.2, 0.6)
 
 # Scaling
 scaler_X = MinMaxScaler()
