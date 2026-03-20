@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import time
 
 import numpy as np
 import pandas as pd
@@ -177,6 +178,8 @@ def main():
     avg_mae = []
     avg_rmse = []
     avg_smape = []
+    training_times = []
+    inference_times = []
 
     session = 0
     train_start = 0
@@ -214,6 +217,7 @@ def main():
 
         optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
+        train_start_time = time.perf_counter()
         train_deterministic_rolling(
             model,
             train_loader,
@@ -222,9 +226,14 @@ def main():
             EPOCHS,
             device=device,
         )
+        train_end_time = time.perf_counter()
+        training_time = train_end_time - train_start_time
 
         print(f' Testing on samples [{test_start}:{test_end}]')
+        inference_start_time = time.perf_counter()
         predictions, targets = predict_deterministic(model, test_loader, scaler_y, device)
+        inference_end_time = time.perf_counter()
+        inference_time = inference_end_time - inference_start_time
 
         save_prediction_plot(
             predictions=predictions,
@@ -242,6 +251,8 @@ def main():
             'train_end': train_end,
             'test_start': test_start,
             'test_end': test_end,
+            'training_time_seconds': float(training_time),
+            'inference_time_seconds': float(inference_time),
         })
 
         print(f"  R2   : {[metrics['r2'][name] for name in target_names]}")
@@ -269,6 +280,8 @@ def main():
         avg_mae.append(metrics['avg_mae'])
         avg_rmse.append(metrics['avg_rmse'])
         avg_smape.append(metrics['avg_smape'])
+        training_times.append(training_time)
+        inference_times.append(inference_time)
 
         train_start = test_start
         train_end = test_end
@@ -348,8 +361,23 @@ def main():
         'avg_mae': avg_mae,
         'avg_rmse': avg_rmse,
         'avg_smape': avg_smape,
+        'training_time_seconds': training_times,
+        'inference_time_seconds': inference_times,
     })
     summary_df.to_csv(OUTPUT_ROOT / 'session_metrics_summary.csv', index=False)
+
+    np.savez(
+        OUTPUT_ROOT / 'lstm_rolling_metrics.npz',
+        session_nums=np.array(session_nums),
+        training_times=np.array(training_times),
+        inference_times=np.array(inference_times),
+        r2_solar=np.array(r2_output_1),
+        r2_wind=np.array(r2_output_2),
+        mae_solar=np.array(mae_output_1),
+        mae_wind=np.array(mae_output_2),
+        rmse_solar=np.array(rmse_output_1),
+        rmse_wind=np.array(rmse_output_2),
+    )
 
     config = {
         'data_path': DATA_PATH,

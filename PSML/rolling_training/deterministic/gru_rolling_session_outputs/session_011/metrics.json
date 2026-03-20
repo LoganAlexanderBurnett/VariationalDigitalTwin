@@ -23,5 +23,7 @@
   "train_start": 481800,
   "train_end": 525600,
   "test_start": 525600,
-  "test_end": 569400
+  "test_end": 569400,
+  "training_time_seconds": 18.487365900014993,
+  "inference_time_seconds": 0.2496955000096932
 }

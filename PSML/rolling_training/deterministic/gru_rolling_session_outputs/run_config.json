@@ -1,6 +1,6 @@
 {
   "data_path": "../../dataset/PSML.csv",
-  "output_root": "rolling_session_outputs",
+  "output_root": "gru_rolling_session_outputs",
   "targets": [
     "solar_power",
     "wind_power"
