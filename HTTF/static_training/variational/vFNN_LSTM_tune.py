@@ -16,11 +16,7 @@ import time
 from torchinfo import summary
 import optuna
 import tqdm as notebook_tqdm
-from httf.data_handler import (
-    build_tensor_dataloader,
-    prepare_autoregressive_splits,
-    report_nan_rows,
-)
+from httf import build_tensor_dataloader, prepare_csv_autoregressive_splits, print_split_shapes
 from httf.trainer import compute_kl_weight, set_random_seed
 from httf.models import VariationalLSTMModel
 from httf.predict import predict_with_uncertainty
@@ -35,36 +31,21 @@ if torch.cuda.is_available():
 
 set_random_seed()
 
-# Load data
-train = pd.read_csv(DATA_DIR / 'TF_TS_train.csv')
-test = pd.read_csv(DATA_DIR / 'TF_TS_test.csv')
-valid = pd.read_csv(DATA_DIR / 'TF_TS_valid.csv')
-
-# Check for NaN values in each dataset
-report_nan_rows(train, 'TS', 'Train')
-report_nan_rows(test, 'TS', 'Test')
-report_nan_rows(valid, 'TS', 'Validation')
-
-# Preprocess the data
-timesteps = 10
-prepared = prepare_autoregressive_splits(
-    train,
-    test,
-    valid,
-    lookback=timesteps,
+prepared = prepare_csv_autoregressive_splits(
+    DATA_DIR,
+    train_name="TF_TS_train.csv",
+    test_name="TF_TS_test.csv",
+    valid_name="TF_TS_valid.csv",
+    lookback=10,
     device=device,
-    interpolate_columns=['TS'],
+    interpolate_columns=["TS"],
 )
 scaler = prepared["scaler"]
 Xtrain_tensor, Ytrain_tensor = prepared["train"]
 Xtest_tensor, Ytest_tensor = prepared["test"]
 Xvalid_tensor, Yvalid_tensor = prepared["valid"]
 
-print(
-    f"""Xtrain, Ytrain: {Xtrain_tensor.shape}, {Ytrain_tensor.shape}
-Xtest,   Ytest: {Xtrain_tensor.shape}, {Ytrain_tensor.shape}
-Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
-)
+print_split_shapes(prepared["train"], prepared["test"], prepared["valid"])
 
 # Define the Optuna objective function using your training loop
 def objective(trial):

@@ -18,13 +18,16 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from httf.data_handler import (
+from httf import (
+    DeterministicLSTMModel,
     build_tensor_dataloader,
-    prepare_autoregressive_splits,
-    report_nan_rows,
+    evaluate_deterministic_model,
+    plot_loss_curves,
+    plot_prediction_series,
+    prepare_csv_autoregressive_splits,
+    print_metrics_report,
+    print_split_shapes,
 )
-from httf.models import DeterministicLSTMModel
-from httf.predict import predict_deterministic
 from httf.trainer import set_random_seed, train_deterministic
 
 
@@ -46,38 +49,20 @@ print(f"Using device: {device}")
 
 set_random_seed()
 
-# Load data
-train = pd.read_csv('train.csv')
-test = pd.read_csv('test.csv')
-valid = pd.read_csv('valid.csv')
-
-test_length = len(test)
-
-# Check for NaN values in each dataset
-report_nan_rows(train, 'TS', 'Train')
-report_nan_rows(test, 'TS', 'Test')
-report_nan_rows(valid, 'TS', 'Validation')
-
-# Preprocess the data
-timesteps = 10
-prepared = prepare_autoregressive_splits(
-    train,
-    test,
-    valid,
-    lookback=timesteps,
+prepared = prepare_csv_autoregressive_splits(
+    ".",
+    train_name="train.csv",
+    test_name="test.csv",
+    valid_name="valid.csv",
+    lookback=10,
     device=device,
-    interpolate_columns=['TS'],
+    interpolate_columns=["TS"],
 )
 scaler = prepared["scaler"]
 Xtrain_tensor, Ytrain_tensor = prepared["train"]
 Xtest_tensor, Ytest_tensor = prepared["test"]
 Xvalid_tensor, Yvalid_tensor = prepared["valid"]
-
-print(
-    f"""Xtrain, Ytrain: {Xtrain_tensor.shape}, {Ytrain_tensor.shape}
-Xtest,   Ytest: {Xtest_tensor.shape}, {Ytest_tensor.shape}
-Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
-)
+print_split_shapes(prepared["train"], prepared["test"], prepared["valid"])
 
 
 # Instantiate the model
@@ -106,101 +91,35 @@ history = train_deterministic(
 end = time.time()
 print(f"Training took {end - start}s")
 
-# Plot loss curve
-plt.figure(figsize=(10, 6))
-plt.plot(history['train_losses'], label='Training Loss')
-plt.plot(history['val_losses'], label='Validation Loss')
-plt.title(f"Loss Curve")
-plt.xlabel("Epochs")
-plt.ylabel("Loss (MSE)")
-plt.legend()
-plt.grid()
-plt.savefig("training.png", bbox_inches='tight')
-plt.close()
+plot_loss_curves(history, "training.png")
 
 test_loader = build_tensor_dataloader(Xtest_tensor, Ytest_tensor, batch_size=batch_size)
-
-Ypred_rescaled, Ytrue_rescaled = predict_deterministic(
+evaluation = evaluate_deterministic_model(
     model,
     test_loader,
     scaler_y=scaler,
     device=device,
+    output_dir=".",
+    output_names=["output_1", "output_2"],
 )
+print_metrics_report(evaluation["metrics"])
 
-# Save the rescaled arrays as .npy files
-np.save('Ytrue_rescaled.npy', Ytrue_rescaled)
-np.save('Ypred_rescaled.npy', Ypred_rescaled)
-
-# Extract individual outputs for evaluation
-Ypred_1, Ypred_2 = Ypred_rescaled[:, 0], Ypred_rescaled[:, 1]
-Ytrue_1, Ytrue_2 = Ytrue_rescaled[:, 0], Ytrue_rescaled[:, 1]
-
-# Plot first output
-plt.figure(figsize=(16, 6))
-
-# Add vertical lines every 5485 time steps in the main plot
-for x_val in np.arange(5485, 340070, 5485):
-    plt.vlines(x=x_val, ymin=-100, ymax=1500, color='gray', linestyle='--', linewidth=0.5, alpha=0.5)
-    
-plt.plot(Ytrue_1, 'b', label="Actual")
-plt.plot(Ypred_1, label="LSTM", color='r', linestyle='dashed')
-plt.xlabel('Time Steps (30 seconds/step)')
-plt.ylabel('Solid Temperature (°C)')
-plt.ylim(0, 1200)
-plt.xlim(0, test_length)
-plt.legend(loc='upper left')
-plt.savefig("testing_ts.png", bbox_inches='tight')
-plt.close()
-
-# Plot second output
-plt.figure(figsize=(16, 6))
-
-# Add vertical lines every 5485 time steps in the main plot
-for x_val in np.arange(5485, 340070, 5485):
-    plt.vlines(x=x_val, ymin=-100, ymax=1500, color='gray', linestyle='--', linewidth=0.5, alpha=0.5)
-
-plt.plot(Ytrue_2, 'b',label="Actual")
-plt.plot(Ypred_2, label="LSTM", color='r', linestyle='dashed')
-plt.xlabel('Time Steps (30 seconds/step)')
-plt.ylabel('Fluid Temperature (°C)')
-plt.ylim(0, 1200)
-plt.xlim(0, test_length)
-plt.legend(loc='upper left')
-plt.savefig("testing_tf.png", bbox_inches='tight')
-plt.close()
-
-def calculate_metrics(y_true, y_pred):
-    r2    = r2_score(y_true, y_pred)
-    mae   = mean_absolute_error(y_true, y_pred)
-    mape  = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
-    rmse  = np.sqrt(mean_squared_error(y_true, y_pred))
-    rmspe = np.sqrt(np.mean(((y_true - y_pred) / y_true)**2)) * 100
-    return r2, mae, mape, rmse, rmspe
-
-metrics = {}
-for idx, (y_true, y_pred) in enumerate([(Ytrue_1, Ypred_1),
-                                        (Ytrue_2, Ypred_2)], start=1):
-    r2, mae, mape, rmse, rmspe = calculate_metrics(y_true, y_pred)
-
-    print(f"--- Metrics for output #{idx} ---")
-    print(f"R^2 Score: {r2}")
-    print(f"MAE:        {mae}")
-    print(f"MAPE:       {mape}%")
-    print(f"RMSE:       {rmse}")
-    print(f"RMSPE:      {rmspe}%\n")
-
-    # cast to native floats for JSON
-    metrics[f"output_{idx}"] = {
-        "r2":    float(r2),
-        "mae":   float(mae),
-        "mape":  float(mape),
-        "rmse":  float(rmse),
-        "rmspe": float(rmspe)
-    }
-
-with open("performance_metrics.json", "w") as fp:
-    json.dump(metrics, fp, indent=4)
-
-print("Saved all metrics to performance_metrics.json")
-
+plot_prediction_series(
+    evaluation["true_values"][:, 0],
+    evaluation["predictions"][:, 0],
+    "testing_ts.png",
+    ylabel="Solid Temperature (°C)",
+    predicted_label="LSTM",
+    color="red",
+    test_length=prepared["test_length"],
+)
+plot_prediction_series(
+    evaluation["true_values"][:, 1],
+    evaluation["predictions"][:, 1],
+    "testing_tf.png",
+    ylabel="Fluid Temperature (°C)",
+    predicted_label="LSTM",
+    color="red",
+    test_length=prepared["test_length"],
+)
 

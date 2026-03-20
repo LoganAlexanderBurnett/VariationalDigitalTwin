@@ -6,6 +6,8 @@ src/HTTF/base_variational_layer.py
 src/httf/base_variational_layer.py
 src/HTTF/data_handler.py
 src/httf/data_handler.py
+src/HTTF/evaluation.py
+src/httf/evaluation.py
 src/HTTF/linear_variational.py
 src/httf/linear_variational.py
 src/HTTF/trainer.py
