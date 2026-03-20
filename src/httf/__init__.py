@@ -1,7 +1,10 @@
 from .data_handler import (
+    build_tensor_dataloader,
     create_autoregressive_sequences,
     create_sequences,
     feature_label_split,
+    prepare_autoregressive_splits,
+    report_nan_rows,
     train_val_test_split,
 )
 from .linear_variational import LinearReparameterization
@@ -31,6 +34,7 @@ __all__ = [
     "calculate_and_display_metrics",
     "calculate_mean_and_ci",
     "compute_kl_weight",
+    "build_tensor_dataloader",
     "create_autoregressive_sequences",
     "create_sequences",
     "DeterministicGRUModel",
@@ -41,6 +45,8 @@ __all__ = [
     "plot_predictions_with_ci",
     "predict_deterministic",
     "predict_with_uncertainty",
+    "prepare_autoregressive_splits",
+    "report_nan_rows",
     "set_random_seed",
     "train_deterministic",
     "train_model",

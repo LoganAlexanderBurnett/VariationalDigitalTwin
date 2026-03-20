@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import time
 from torchinfo import summary
@@ -19,7 +18,11 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from httf.data_handler import create_autoregressive_sequences
+from httf.data_handler import (
+    build_tensor_dataloader,
+    prepare_autoregressive_splits,
+    report_nan_rows,
+)
 from httf.models import DeterministicLSTMModel
 from httf.predict import predict_deterministic
 from httf.trainer import set_random_seed, train_deterministic
@@ -50,39 +53,25 @@ valid = pd.read_csv('valid.csv')
 
 test_length = len(test)
 
-# Function to find rows with NaN values in a pandas DataFrame
-def check_nans_in_dataframe(df, column_name, name):
-    nan_rows = df[df[column_name].isna()]
-    if not nan_rows.empty:
-        print(f"Rows with NaN values in {name} dataset:")
-        print(nan_rows)
-    else:
-        print(f"No NaN values in {name} dataset.")
-
 # Check for NaN values in each dataset
-check_nans_in_dataframe(train, 'TS', 'Train')
-check_nans_in_dataframe(test, 'TS', 'Test')
-check_nans_in_dataframe(valid, 'TS', 'Validation')
+report_nan_rows(train, 'TS', 'Train')
+report_nan_rows(test, 'TS', 'Test')
+report_nan_rows(valid, 'TS', 'Validation')
 
 # Preprocess the data
-scaler = MinMaxScaler(feature_range=(0, 1))
-train_data = scaler.fit_transform(train)
-test_data = scaler.transform(test)
-valid_data = scaler.transform(valid)
-
-# Create sequences
 timesteps = 10
-Xtrain, Ytrain = create_autoregressive_sequences(train_data, lookback=timesteps)
-Xtest, Ytest = create_autoregressive_sequences(test_data, lookback=timesteps)
-Xvalid, Yvalid = create_autoregressive_sequences(valid_data, lookback=timesteps)
-
-# Convert to PyTorch tensors
-Xtrain_tensor = torch.tensor(Xtrain, dtype=torch.float32).to(device)
-Ytrain_tensor = torch.tensor(Ytrain, dtype=torch.float32).to(device)
-Xtest_tensor = torch.tensor(Xtest, dtype=torch.float32).to(device)
-Ytest_tensor = torch.tensor(Ytest, dtype=torch.float32).to(device)
-Xvalid_tensor = torch.tensor(Xvalid, dtype=torch.float32).to(device)
-Yvalid_tensor = torch.tensor(Yvalid, dtype=torch.float32).to(device)
+prepared = prepare_autoregressive_splits(
+    train,
+    test,
+    valid,
+    lookback=timesteps,
+    device=device,
+    interpolate_columns=['TS'],
+)
+scaler = prepared["scaler"]
+Xtrain_tensor, Ytrain_tensor = prepared["train"]
+Xtest_tensor, Ytest_tensor = prepared["test"]
+Xvalid_tensor, Yvalid_tensor = prepared["valid"]
 
 print(
     f"""Xtrain, Ytrain: {Xtrain_tensor.shape}, {Ytrain_tensor.shape}
@@ -99,10 +88,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.000023)
 
 # Training loop
 epochs = 50
-train_dataset = torch.utils.data.TensorDataset(Xtrain_tensor, Ytrain_tensor)
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
-valid_dataset = torch.utils.data.TensorDataset(Xvalid_tensor, Yvalid_tensor)
-valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size)
+train_loader = build_tensor_dataloader(Xtrain_tensor, Ytrain_tensor, batch_size=batch_size)
+valid_loader = build_tensor_dataloader(Xvalid_tensor, Yvalid_tensor, batch_size=batch_size)
 
 start = time.time()
 
@@ -131,8 +118,7 @@ plt.grid()
 plt.savefig("training.png", bbox_inches='tight')
 plt.close()
 
-test_dataset = torch.utils.data.TensorDataset(Xtest_tensor, Ytest_tensor)
-test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size)
+test_loader = build_tensor_dataloader(Xtest_tensor, Ytest_tensor, batch_size=batch_size)
 
 Ypred_rescaled, Ytrue_rescaled = predict_deterministic(
     model,
@@ -216,6 +202,5 @@ with open("performance_metrics.json", "w") as fp:
     json.dump(metrics, fp, indent=4)
 
 print("Saved all metrics to performance_metrics.json")
-
 
 
