@@ -19,7 +19,10 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from HTTF.data_handler import create_autoregressive_sequences
+from httf.data_handler import create_autoregressive_sequences
+from httf.models import DeterministicLSTMModel
+from httf.predict import predict_deterministic
+from httf.trainer import set_random_seed, train_deterministic
 
 
 # parse command-line
@@ -37,6 +40,8 @@ os.chdir(args.data_dir)
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
+
+set_random_seed()
 
 # Load data
 train = pd.read_csv('train.csv')
@@ -86,26 +91,9 @@ Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
 )
 
 
-# Define the LSTM model
-class LSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size1, hidden_size2, hidden_size3, output_size):
-        super(LSTMModel, self).__init__()
-        self.lstm1 = nn.LSTM(input_size, hidden_size1, batch_first=True)
-        self.lstm2 = nn.LSTM(hidden_size1, hidden_size2, batch_first=True)
-        self.lstm3 = nn.LSTM(hidden_size2, hidden_size3, batch_first=True)
-        self.fc = nn.Linear(hidden_size3, output_size)
-    
-    def forward(self, x):
-        out, _ = self.lstm1(x)
-        out, _ = self.lstm2(out)
-        out, _ = self.lstm3(out)
-        out = self.fc(out[:, -1, :])  # Use the output of the last time step
-        return out
-
-
 # Instantiate the model
 batch_size = 512
-model = LSTMModel(input_size=2, hidden_size1=96, hidden_size2=16, hidden_size3=48, output_size=2).to(device)
+model = DeterministicLSTMModel(input_size=2, hidden_size1=96, hidden_size2=16, hidden_size3=48, output_size=2).to(device)
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.000023)
 
@@ -113,41 +101,28 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.000023)
 epochs = 50
 train_dataset = torch.utils.data.TensorDataset(Xtrain_tensor, Ytrain_tensor)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
+valid_dataset = torch.utils.data.TensorDataset(Xvalid_tensor, Yvalid_tensor)
+valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size)
 
 start = time.time()
 
-history = {'loss': [], 'val_loss': []}
-for epoch in range(epochs):
-    model.train()
-    epoch_loss = 0
-    for X_batch, Y_batch in train_loader:
-        optimizer.zero_grad()
-        outputs = model(X_batch)
-        loss = criterion(outputs, Y_batch)
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-
-    #scheduler.step()
-    history['loss'].append(epoch_loss / len(train_loader))
-    loss = epoch_loss / len(train_loader)
-    
-    # Validation loss
-    model.eval()
-    with torch.no_grad():
-        val_outputs = model(Xvalid_tensor)
-        val_loss = criterion(val_outputs, Yvalid_tensor).item()
-        history['val_loss'].append(val_loss)
-    
-    print(f"Epoch {epoch+1}/{epochs}, Loss: {loss:.4f}, Val Loss: {val_loss:.4f}")
+history = train_deterministic(
+    model=model,
+    train_loader=train_loader,
+    optimizer=optimizer,
+    loss_fn=criterion,
+    num_epochs=epochs,
+    device=device,
+    val_loader=valid_loader,
+)
 
 end = time.time()
 print(f"Training took {end - start}s")
 
 # Plot loss curve
 plt.figure(figsize=(10, 6))
-plt.plot(history['loss'], label='Training Loss')
-plt.plot(history['val_loss'], label='Validation Loss')
+plt.plot(history['train_losses'], label='Training Loss')
+plt.plot(history['val_losses'], label='Validation Loss')
 plt.title(f"Loss Curve")
 plt.xlabel("Epochs")
 plt.ylabel("Loss (MSE)")
@@ -156,23 +131,15 @@ plt.grid()
 plt.savefig("training.png", bbox_inches='tight')
 plt.close()
 
-# Ensure model is in evaluation mode
-model.cpu()
-Xtest_tensor = Xtest_tensor.cpu()
-Ytest_tensor = Ytest_tensor.cpu()
-model.eval()
+test_dataset = torch.utils.data.TensorDataset(Xtest_tensor, Ytest_tensor)
+test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size)
 
-# Generate predictions
-with torch.no_grad():
-    Ypred = model(Xtest_tensor)  # Assuming Xvalid is already on the correct device
-
-# Convert to NumPy for plotting
-Ypred = Ypred.cpu().numpy()
-Ytrue = Ytest_tensor.cpu().numpy()
-
-# Rescale predictions and true values back to their original scale
-Ypred_rescaled = scaler.inverse_transform(Ypred)
-Ytrue_rescaled = scaler.inverse_transform(Ytrue)
+Ypred_rescaled, Ytrue_rescaled = predict_deterministic(
+    model,
+    test_loader,
+    scaler_y=scaler,
+    device=device,
+)
 
 # Save the rescaled arrays as .npy files
 np.save('Ytrue_rescaled.npy', Ytrue_rescaled)

@@ -1,4 +1,6 @@
-from .data_handler import *
-from .trainer import *
-from .uncertainty import *
-from .linear_variational import *
+"""Compatibility shim for legacy uppercase HTTF imports.
+
+Prefer importing from `httf` instead.
+"""
+
+from httf import *

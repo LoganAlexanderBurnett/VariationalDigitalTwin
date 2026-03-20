@@ -1,4 +1,3 @@
-import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -19,27 +18,10 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from HTTF.data_handler import create_autoregressive_sequences
-from HTTF.linear_variational import LinearReparameterization
-from HTTF.trainer import train_model
-from HTTF.uncertainty import predict_with_uncertainty
-
-def set_random_seed(seed_value=42):
-    # Python random seed
-    random.seed(seed_value)
-    
-    # Numpy random seed
-    np.random.seed(seed_value)
-    
-    # PyTorch seed
-    torch.manual_seed(seed_value)
-    
-    # If using CUDA (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # if using multi-GPU
-        torch.backends.cudnn.deterministic = True  # For reproducibility
-        torch.backends.cudnn.benchmark = False  # Disable auto-optimization for determinism
+from httf.data_handler import create_autoregressive_sequences
+from httf.models import VariationalGRUModel
+from httf.trainer import set_random_seed, train_model
+from httf.predict import predict_with_uncertainty
 
 set_random_seed()
 
@@ -107,48 +89,6 @@ Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
 )
 
 
-# Define the GRU model
-class vGRU(nn.Module):
-    def __init__(self, in_features, hidden_size1, hidden_size2, hidden_size3, out_features, prior_mean=0, prior_variance=1.0, posterior_rho_init=-3.0, bias=True):
-        super(vGRU, self).__init__()
-
-        # Define multiple GRU layers
-        self.gru1 = nn.GRU(in_features, hidden_size1, batch_first=True)
-
-        self.gru2 = nn.GRU(hidden_size1, hidden_size2, batch_first=True)
-
-        self.gru3 = nn.GRU(hidden_size2, hidden_size3, batch_first=True)
-
-        self.fc = LinearReparameterization(
-            in_features=hidden_size3,
-            out_features=out_features,
-            prior_mean=prior_mean,
-            prior_variance=prior_variance,
-            posterior_rho_init=posterior_rho_init,
-            bias=bias
-        )
-
-    def forward(self, x):
-
-        # — LAYER 1 — 
-        out, _ = self.gru1(x)
-
-        # — LAYER 2 — 
-        out, _ = self.gru2(out)
-
-        # — LAYER 3 — 
-        out, _ = self.gru3(out)
-
-        # We only need the last time step's features:
-        hidden_last_step = out[:, -1, :]  # → (batch, hidden_size3)
-
-        # — FINAL VARIATIONAL LAYER —
-        output, kl_fc = self.fc(hidden_last_step)
-        kl_total = kl_fc
-
-        return output, kl_total
-
-
 # Instantiate the model
 batch_size = 256
 learning_rate = 0.00018
@@ -158,7 +98,7 @@ hidden2 = 64
 hidden3 = 32
 criterion = nn.MSELoss()
 
-model = vGRU(in_features=2, hidden_size1=hidden1, hidden_size2=hidden2, hidden_size3=hidden3, out_features=2).to(device)
+model = VariationalGRUModel(in_features=2, hidden_size1=hidden1, hidden_size2=hidden2, hidden_size3=hidden3, out_features=2).to(device)
 for gru in (model.gru1, model.gru2, model.gru3):
     gru.flatten_parameters()
 
@@ -177,7 +117,9 @@ test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size)
 start = time.time()
 
 # Train and validate the model
-train_losses, val_losses = train_model(model, train_loader, valid_loader, num_epochs=num_epochs, reconstruction_loss_fn=criterion, optimizer=optimizer, kl_schedule=None, device=device)
+history = train_model(model, train_loader, valid_loader, num_epochs=num_epochs, reconstruction_loss_fn=criterion, optimizer=optimizer, kl_schedule=None, device=device)
+train_losses = history["train_losses"]
+val_losses = history["val_losses"]
 
 end = time.time()
 train_time = end - start

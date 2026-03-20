@@ -6,14 +6,16 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from HTTF.data_handler import create_autoregressive_sequences
+from httf.data_handler import create_autoregressive_sequences
+from httf.models import DeterministicLSTMModel
+from httf.predict import predict_deterministic
+from httf.trainer import set_random_seed, train_deterministic
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import time
@@ -24,6 +26,8 @@ DATA_DIR = Path(__file__).resolve().parent
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
+
+set_random_seed()
 
 # Load data
 train = pd.read_csv(DATA_DIR / 'TF_TS_train.csv')
@@ -75,25 +79,9 @@ Xtest,   Ytest: {Xtrain_tensor.shape}, {Ytrain_tensor.shape}
 Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
 )
 
-# Define the LSTM model
-class LSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size1, hidden_size2, hidden_size3, output_size):
-        super(LSTMModel, self).__init__()
-        self.lstm1 = nn.LSTM(input_size, hidden_size1, batch_first=True)
-        self.lstm2 = nn.LSTM(hidden_size1, hidden_size2, batch_first=True)
-        self.lstm3 = nn.LSTM(hidden_size2, hidden_size3, batch_first=True)
-        self.fc = nn.Linear(hidden_size3, output_size)
-    
-    def forward(self, x):
-        out, _ = self.lstm1(x)
-        out, _ = self.lstm2(out)
-        out, _ = self.lstm3(out)
-        out = self.fc(out[:, -1, :])  # Use the output of the last time step
-        return out
-
 # Instantiate the model
 batch_size = 512
-model = LSTMModel(input_size=2, hidden_size1=96, hidden_size2=16, hidden_size3=48, output_size=2).to(device)
+model = DeterministicLSTMModel(input_size=2, hidden_size1=96, hidden_size2=16, hidden_size3=48, output_size=2).to(device)
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.000023)
 
@@ -109,48 +97,23 @@ valid_loader  = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size
 
 start = time.time()
 
-history = {'loss': [], 'val_loss': []}
-for epoch in range(epochs):
-    model.train()
-    epoch_loss = 0
-    for X_batch, Y_batch in train_loader:
-        X_batch, Y_batch = X_batch.to(device), Y_batch.to(device)
-        optimizer.zero_grad()
-        outputs = model(X_batch)
-        loss = criterion(outputs, Y_batch)
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-
-    #scheduler.step()
-    history['loss'].append(epoch_loss / len(train_loader))
-    loss = epoch_loss / len(train_loader)
-    
-    # Validation loss
-    model.eval()
-    val_loss_accum = 0.0
-    with torch.no_grad():
-        for Xv_batch, Yv_batch in valid_loader:
-            Xv_batch = Xv_batch.to(device)
-            Yv_batch = Yv_batch.to(device)
-
-            val_out = model(Xv_batch)
-            batch_val_loss = criterion(val_out, Yv_batch)
-            val_loss_accum += batch_val_loss.item()
-
-    avg_val_loss = val_loss_accum / len(valid_loader)
-    history['val_loss'].append(avg_val_loss)
-
-    print(f"Epoch {epoch+1}/{epochs}, Train Loss: {loss:.4f}, Val Loss: {avg_val_loss:.4f}")
-
+history = train_deterministic(
+    model=model,
+    train_loader=train_loader,
+    optimizer=optimizer,
+    loss_fn=criterion,
+    num_epochs=epochs,
+    device=device,
+    val_loader=valid_loader,
+)
 
 end = time.time()
 print(f"Training took {end - start}s")
 
 # Plot loss curve
 plt.figure(figsize=(10, 6))
-plt.plot(history['loss'], label='Training Loss')
-plt.plot(history['val_loss'], label='Validation Loss')
+plt.plot(history['train_losses'], label='Training Loss')
+plt.plot(history['val_losses'], label='Validation Loss')
 plt.title(f"Loss Curve")
 plt.xlabel("Epochs")
 plt.ylabel("Loss (MSE)")
@@ -161,41 +124,13 @@ plt.show()
 test_dataset = torch.utils.data.TensorDataset(Xtest_tensor, Ytest_tensor)
 test_loader  = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-# 2) Run a small loop over test batches to collect predictions and compute test loss
-model.eval()
-test_loss_accum = 0.0
-all_preds = []
-all_trues = []
-
 start = time.time()
-with torch.no_grad():
-    for X_batch, Y_batch in test_loader:
-        X_batch = X_batch.to(device)
-        Y_batch = Y_batch.to(device)
-
-        # Forward pass
-        outputs = model(X_batch)
-
-        # Compute batch loss (e.g. MSE)
-        loss = criterion(outputs, Y_batch)
-        test_loss_accum += loss.item()
-
-        # Store predictions and true values (move back to CPU)
-        all_preds.append(outputs.cpu())
-        all_trues.append(Y_batch.cpu())
-        
-# 4) Concatenate all batch‐wise tensors into single tensors
-all_preds = torch.cat(all_preds, dim=0)  # shape: (num_test_samples, ...)
-all_trues = torch.cat(all_trues, dim=0)
-
-# Convert to NumPy for plotting
-Ypred = all_preds.cpu().numpy()
-Ytrue = all_trues.cpu().numpy()
-
-# Rescale predictions and true values back to their original scale
-Ypred_rescaled = scaler.inverse_transform(Ypred)
-Ytrue_rescaled = scaler.inverse_transform(Ytrue)
-
+Ypred_rescaled, Ytrue_rescaled = predict_deterministic(
+    model,
+    test_loader,
+    scaler_y=scaler,
+    device=device,
+)
 end = time.time()
 print(f"Inference took: {end-start:.4f}s")
 

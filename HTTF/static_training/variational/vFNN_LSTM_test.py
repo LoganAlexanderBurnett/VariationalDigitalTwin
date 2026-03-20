@@ -11,40 +11,21 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import time
-import random
 from torchinfo import summary
 
-from HTTF.data_handler import create_autoregressive_sequences
-from HTTF.trainer import train_model
-from HTTF.uncertainty import predict_with_uncertainty
-from HTTF.linear_variational import LinearReparameterization
+from httf.data_handler import create_autoregressive_sequences
+from httf.trainer import set_random_seed, train_model
+from httf.models import VariationalLSTMModel
+from httf.predict import predict_with_uncertainty
 
 DATA_DIR = Path(__file__).resolve().parent
 
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
-
-def set_random_seed(seed_value=42):
-    # Python random seed
-    random.seed(seed_value)
-    
-    # Numpy random seed
-    np.random.seed(seed_value)
-    
-    # PyTorch seed
-    torch.manual_seed(seed_value)
-    
-    # If using CUDA (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # if using multi-GPU
-        torch.backends.cudnn.deterministic = True  # For reproducibility
-        torch.backends.cudnn.benchmark = False  # Disable auto-optimization for determinism
 
 set_random_seed()
 
@@ -98,46 +79,6 @@ Xtest,   Ytest: {Xtrain_tensor.shape}, {Ytrain_tensor.shape}
 Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
 )
 
-class vLSTM(nn.Module):
-    def __init__(self, in_features, hidden_size1, hidden_size2, hidden_size3, out_features, prior_mean=0, prior_variance=1.0, posterior_rho_init=-3.0, bias=True):
-        super(vLSTM, self).__init__()
-
-        # Define multiple LSTM layers
-        self.lstm1 = nn.LSTM(in_features, hidden_size1, batch_first=True)
-
-        self.lstm2 = nn.LSTM(hidden_size1, hidden_size2, batch_first=True)
-
-        self.lstm3 = nn.LSTM(hidden_size2, hidden_size3, batch_first=True)
-        
-        self.fc = LinearReparameterization(
-            in_features=hidden_size3,
-            out_features=out_features,
-            prior_mean=prior_mean,
-            prior_variance=prior_variance,
-            posterior_rho_init=posterior_rho_init,
-            bias=bias
-        )
-
-    def forward(self, x, hidden_states=None):
-        # LSTM1
-        out, _ = self.lstm1(x, hidden_states)
-    
-        # LSTM2
-        out, _ = self.lstm2(out, hidden_states)
-
-        # LSTM3
-        out, _ = self.lstm3(out, hidden_states)
-
-        # Get the output for the **last time step** only: [batch_size, hidden_size]
-        hidden_last_step = out[:, -1, :]  # Last time step
-
-        # Pass through the final linear layer
-        output, kl_fc = self.fc(hidden_last_step)
-        kl_total = kl_fc
-
-        # Return output and total KL divergence
-        return output, kl_total
-
 # Instantiate the model
 batch_size = 256
 learning_rate = 0.00018
@@ -147,7 +88,7 @@ hidden2 = 64
 hidden3 = 32
 criterion = nn.MSELoss()
 
-model = vLSTM(in_features=2, hidden_size1=hidden1, hidden_size2=hidden2, hidden_size3=hidden3, out_features=2).to(device)
+model = VariationalLSTMModel(in_features=2, hidden_size1=hidden1, hidden_size2=hidden2, hidden_size3=hidden3, out_features=2).to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 summary(model, input_size=(batch_size, timesteps, 2), device=device)
@@ -174,7 +115,9 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
 start = time.time()
 
 # Train and validate the model
-train_losses, val_losses = train_model(model, train_loader, valid_loader, num_epochs=num_epochs, reconstruction_loss_fn=criterion, optimizer=optimizer, kl_schedule=None, device=device)
+history = train_model(model, train_loader, valid_loader, num_epochs=num_epochs, reconstruction_loss_fn=criterion, optimizer=optimizer, kl_schedule=None, device=device)
+train_losses = history["train_losses"]
+val_losses = history["val_losses"]
 
 end = time.time()
 train_time = end - start

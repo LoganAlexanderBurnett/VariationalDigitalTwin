@@ -3,4 +3,4 @@
 Prefer importing from `httf` instead.
 """
 
-from httf.trainer import *
+from httf.models import *

@@ -11,40 +11,21 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import time
-import random
 from torchinfo import summary
 
-from HTTF.data_handler import create_autoregressive_sequences
-from HTTF.trainer import train_model
-from HTTF.uncertainty import predict_with_uncertainty
-from HTTF.linear_variational import LinearReparameterization
+from httf.data_handler import create_autoregressive_sequences
+from httf.trainer import set_random_seed, train_model
+from httf.models import VariationalGRUModel
+from httf.predict import predict_with_uncertainty
 
 DATA_DIR = Path(__file__).resolve().parent
 
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
-
-def set_random_seed(seed_value=42):
-    # Python random seed
-    random.seed(seed_value)
-    
-    # Numpy random seed
-    np.random.seed(seed_value)
-    
-    # PyTorch seed
-    torch.manual_seed(seed_value)
-    
-    # If using CUDA (GPU)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # if using multi-GPU
-        torch.backends.cudnn.deterministic = True  # For reproducibility
-        torch.backends.cudnn.benchmark = False  # Disable auto-optimization for determinism
 
 set_random_seed()
 
@@ -98,47 +79,6 @@ Xtest,   Ytest: {Xtrain_tensor.shape}, {Ytrain_tensor.shape}
 Xvalid, Yvalid: {Xvalid_tensor.shape}, {Yvalid_tensor.shape}"""
 )
 
-class vGRU(nn.Module):
-    def __init__(self, in_features, hidden_size1, hidden_size2, hidden_size3, out_features, prior_mean=0, prior_variance=1.0, posterior_rho_init=-3.0, bias=True
-    ):
-        super(vGRU, self).__init__()
-
-        # Define multiple GRU layers
-        self.gru1 = nn.GRU(in_features, hidden_size1, batch_first=True)
-
-        self.gru2 = nn.GRU(hidden_size1, hidden_size2, batch_first=True)
-
-        self.gru3 = nn.GRU(hidden_size2, hidden_size3, batch_first=True)
-
-        self.fc = LinearReparameterization(
-            in_features=hidden_size3,
-            out_features=out_features,
-            prior_mean=prior_mean,
-            prior_variance=prior_variance,
-            posterior_rho_init=posterior_rho_init,
-            bias=bias
-        )
-
-    def forward(self, x):
-
-        # — LAYER 1 — 
-        out, _ = self.gru1(x)
-
-        # — LAYER 2 — 
-        out, _ = self.gru2(out)
-
-        # — LAYER 3 — 
-        out, _ = self.gru3(out)
-
-        # We only need the last time step's features:
-        hidden_last_step = out[:, -1, :]  # → (batch, hidden_size3)
-
-        # — FINAL VARIATIONAL LAYER —
-        output, kl_fc = self.fc(hidden_last_step)
-        kl_total = kl_fc
-
-        return output, kl_total
-
 # Instantiate the model
 batch_size = 256
 learning_rate = 0.00018
@@ -148,7 +88,7 @@ hidden2 = 64
 hidden3 = 32
 criterion = nn.MSELoss()
 
-model = vGRU(in_features=2, hidden_size1=hidden1, hidden_size2=hidden2, hidden_size3=hidden3, out_features=2).to(device)
+model = VariationalGRUModel(in_features=2, hidden_size1=hidden1, hidden_size2=hidden2, hidden_size3=hidden3, out_features=2).to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 summary(model, input_size=(batch_size, timesteps, 2), device=device)
@@ -175,7 +115,9 @@ for batch_idx, (inputs, targets) in enumerate(train_loader):
 start = time.time()
 
 # Train and validate the model
-train_losses, val_losses = train_model(model, train_loader, valid_loader, num_epochs=num_epochs, reconstruction_loss_fn=criterion, optimizer=optimizer, kl_schedule=None, device=device)
+history = train_model(model, train_loader, valid_loader, num_epochs=num_epochs, reconstruction_loss_fn=criterion, optimizer=optimizer, kl_schedule=None, device=device)
+train_losses = history["train_losses"]
+val_losses = history["val_losses"]
 
 end = time.time()
 train_time = end - start
