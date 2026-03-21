@@ -6,7 +6,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import time
-from torchinfo import summary
 import json
 import os
 import argparse

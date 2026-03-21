@@ -4,7 +4,6 @@ import time
 
 import torch
 import torch.nn as nn
-from torchinfo import summary
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "src" / "httf").exists())
 SRC_DIR = PROJECT_ROOT / "src"
@@ -52,8 +51,6 @@ timesteps = Xtrain_tensor.shape[1]
 model = DeterministicGRUModel(input_size=2, hidden_size1=96, hidden_size2=16, hidden_size3=48, output_size=2).to(device)
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.000023)
-
-summary(model, input_size=(batch_size, timesteps, 2), device=device)
 
 train_loader = build_tensor_dataloader(Xtrain_tensor, Ytrain_tensor, batch_size=batch_size, shuffle=False)
 valid_loader = build_tensor_dataloader(Xvalid_tensor, Yvalid_tensor, batch_size=batch_size, shuffle=False)

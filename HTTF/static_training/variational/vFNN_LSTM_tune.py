@@ -13,7 +13,6 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import time
-from torchinfo import summary
 import optuna
 import tqdm as notebook_tqdm
 from httf import build_tensor_dataloader, prepare_csv_autoregressive_splits, print_split_shapes
