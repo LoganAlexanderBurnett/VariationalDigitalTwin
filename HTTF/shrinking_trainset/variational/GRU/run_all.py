@@ -2,9 +2,9 @@ import os
 import subprocess
 import re
 
-def find_realloc_dirs(base="."):
+def find_shrink_dirs(base="."):
     """
-    Return a list of all subdirectories named 'reallocate_<N>',
+    Return a list of all subdirectories named 'shrink_train_<N>',
     sorted by the integer N.
     """
     pattern = re.compile(r"shrink_train_(\d+)$")
@@ -18,7 +18,7 @@ def find_realloc_dirs(base="."):
     return [d for _, d in sorted(dirs, key=lambda x: x[0])]
 
 def main():
-    dirs = find_realloc_dirs()
+    dirs = find_shrink_dirs()
     total = len(dirs)
     if total == 0:
         print("No 'shrink_train_*' directories found.")
