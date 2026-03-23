@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import random
 from dataclasses import dataclass
+from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -76,6 +78,12 @@ def build_static_checkpoint_path(args) -> Path:
     )
 
 
+def build_static_predictions_pdf_path(args) -> Path:
+    return Path(args.results_dir) / (
+        f"{args.results_prefix}-{args.save_model}-batch_size={args.train_runs}-seq_len={args.seq_len}-predictions.pdf"
+    )
+
+
 def train_static_model(args, train_x, train_y, model_cls):
     model = model_cls(args)
     print(f"Selected model: {args.model_name}")
@@ -97,31 +105,33 @@ def evaluate_static_model(args, test_runs: Iterable[BatteryRun], model_cls):
     model.set_batch_size(1)
 
     errors = []
-    for i, run in enumerate(test_runs, start=1):
-        curr = run.current
-        volt = run.voltage
-        date = run.date
-        current_tensor = torch.from_numpy(curr.astype(np.float32)).view(1, -1)
-        if args.mode == "variational":
-            current_tensor = current_tensor.to(args.device)
-            prediction = predict_with_uncertainty(
-                model, current_tensor, mc_samples=args.mc_samples, n_jobs=args.n_jobs
+    predictions_pdf_path = build_static_predictions_pdf_path(args)
+    predictions_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(predictions_pdf_path) as pdf:
+        for run in test_runs:
+            curr = run.current
+            volt = run.voltage
+            date = run.date
+            current_tensor = torch.from_numpy(curr.astype(np.float32)).view(1, -1)
+            if args.mode == "variational":
+                current_tensor = current_tensor.to(args.device)
+                prediction = predict_with_uncertainty(
+                    model, current_tensor, mc_samples=args.mc_samples, n_jobs=args.n_jobs
+                )
+                pred = prediction['mean']
+                lower = prediction['lower']
+                upper = prediction['upper']
+            else:
+                pred, _ = predict_deterministic_run(model, current_tensor)
+                lower = upper = None
+
+            assert pred.shape[0] == volt.shape[0], (
+                f"Length mismatch: pred={pred.shape[0]}, true={volt.shape[0]}"
             )
-            pred = prediction['mean']
-            lower = prediction['lower']
-            upper = prediction['upper']
-        else:
-            pred, _ = predict_deterministic_run(model, current_tensor)
-            lower = upper = None
 
-        assert pred.shape[0] == volt.shape[0], (
-            f"Length mismatch: pred={pred.shape[0]}, true={volt.shape[0]}"
-        )
+            metrics_payload = compute_error_metrics(volt, pred)
+            errors.append([metrics_payload['mae'], metrics_payload['mape'], metrics_payload['mse'], metrics_payload['rmse']])
 
-        metrics_payload = compute_error_metrics(volt, pred)
-        errors.append([metrics_payload['mae'], metrics_payload['mape'], metrics_payload['mse'], metrics_payload['rmse']])
-
-        if i <= args.plot_n:
             fig, _, ax2 = plot_static_prediction(curr, volt, pred, date, lower=lower, upper=upper)
             ax2.text(
                 0.5,
@@ -134,11 +144,13 @@ def evaluate_static_model(args, test_runs: Iterable[BatteryRun], model_cls):
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", alpha=0.7),
             )
             fig.tight_layout()
-            fig.show()
+            pdf.savefig(fig)
+            plt.close(fig)
 
     errors = np.array(errors)
     mean_err = errors.mean(axis=0)
     print(f"Testing on {errors.shape[0]} runs")
+    print("Saved prediction plots to", predictions_pdf_path)
     print("Test error [MAE, MAPE, MSE, RMSE]:", mean_err.tolist())
     return mean_err, errors
 
