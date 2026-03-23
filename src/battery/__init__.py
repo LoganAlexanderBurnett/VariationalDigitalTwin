@@ -13,6 +13,8 @@ from .data import (
     sort_runs_chronologically,
 )
 from .losses import WeightedL1Loss, WeightedL2Loss
+from .evaluation import compute_error_metrics, plot_rolling_prediction, plot_static_prediction, save_metrics_json
+from .predict import predict_deterministic_run, predict_with_uncertainty
 from .models import (
     BaseVariationalLayer_,
     DeterministicBatteryModel,
@@ -50,6 +52,12 @@ __all__ = [
     "VariationalBatteryModel",
     "WeightedL1Loss",
     "WeightedL2Loss",
+    "compute_error_metrics",
+    "plot_rolling_prediction",
+    "plot_static_prediction",
+    "predict_deterministic_run",
+    "predict_with_uncertainty",
+    "save_metrics_json",
     "build_optimizer",
     "build_scheduler",
     "build_static_arg_parser",

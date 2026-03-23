@@ -6,13 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from joblib import Parallel, delayed
-from sklearn import metrics
 
 from .data import BatteryRun, BatteryRunDataset
+from .evaluation import compute_error_metrics, plot_static_prediction
+from .predict import predict_deterministic_run, predict_with_uncertainty
 from .trainer import (
     load_battery_checkpoint,
     train_battery_deterministic,
@@ -57,14 +56,18 @@ def describe_removed_runs(dataset: BatteryRunDataset) -> None:
         print("No runs removed due to negative current.")
 
 
-
-
 def eval_metrics(y_true, y_pred):
-    mae = metrics.mean_absolute_error(y_true, y_pred)
-    mape = metrics.mean_absolute_percentage_error(y_true, y_pred)
-    mse = metrics.mean_squared_error(y_true, y_pred)
-    rmse = np.sqrt(mse)
-    return [mae, mape, mse, rmse]
+    metrics_payload = compute_error_metrics(y_true, y_pred)
+    return [
+        metrics_payload['mae'],
+        metrics_payload['mape'],
+        metrics_payload['mse'],
+        metrics_payload['rmse'],
+    ]
+
+
+
+
 
 
 def build_static_checkpoint_path(args) -> Path:
@@ -86,21 +89,6 @@ def train_static_model(args, train_x, train_y, model_cls):
     return model
 
 
-def _mc_predict(model, current_seq, mc_samples=100, n_jobs=6):
-    base_train = torch.nn.Module.train
-    base_train(model, False)
-
-    def sample_prediction():
-        with torch.no_grad():
-            v_pred, _ = model.predict(current_seq)
-        return v_pred.cpu().numpy()[0]
-
-    preds = Parallel(n_jobs=n_jobs)(delayed(sample_prediction)() for _ in range(mc_samples))
-    stack = np.stack(preds, axis=0)
-    mean = stack.mean(axis=0)
-    lower = np.percentile(stack, 2.5, axis=0)
-    upper = np.percentile(stack, 97.5, axis=0)
-    return mean, lower, upper
 
 
 def evaluate_static_model(args, test_runs: Iterable[BatteryRun], model_cls):
@@ -116,26 +104,37 @@ def evaluate_static_model(args, test_runs: Iterable[BatteryRun], model_cls):
         current_tensor = torch.from_numpy(curr.astype(np.float32)).view(1, -1)
         if args.mode == "variational":
             current_tensor = current_tensor.to(args.device)
-            pred, lower, upper = _mc_predict(
-                model,
-                current_tensor,
-                mc_samples=args.mc_samples,
-                n_jobs=args.n_jobs,
+            prediction = predict_with_uncertainty(
+                model, current_tensor, mc_samples=args.mc_samples, n_jobs=args.n_jobs
             )
+            pred = prediction['mean']
+            lower = prediction['lower']
+            upper = prediction['upper']
         else:
-            pred_tensor, _ = model.predict(current_tensor)
-            pred = pred_tensor.detach().cpu().numpy().ravel()
+            pred, _ = predict_deterministic_run(model, current_tensor)
             lower = upper = None
 
         assert pred.shape[0] == volt.shape[0], (
             f"Length mismatch: pred={pred.shape[0]}, true={volt.shape[0]}"
         )
 
-        met = eval_metrics(volt, pred)
-        errors.append(met)
+        metrics_payload = compute_error_metrics(volt, pred)
+        errors.append([metrics_payload['mae'], metrics_payload['mape'], metrics_payload['mse'], metrics_payload['rmse']])
 
         if i <= args.plot_n:
-            _plot_prediction(curr, volt, pred, date, met[2], lower=lower, upper=upper)
+            fig, _, ax2 = plot_static_prediction(curr, volt, pred, date, lower=lower, upper=upper)
+            ax2.text(
+                0.5,
+                0.95,
+                f"MSE = {metrics_payload['mse']:.4e}",
+                transform=ax2.transAxes,
+                ha="center",
+                va="top",
+                fontsize=10,
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", alpha=0.7),
+            )
+            fig.tight_layout()
+            fig.show()
 
     errors = np.array(errors)
     mean_err = errors.mean(axis=0)
@@ -144,40 +143,6 @@ def evaluate_static_model(args, test_runs: Iterable[BatteryRun], model_cls):
     return mean_err, errors
 
 
-def _plot_prediction(curr, volt, pred, date, mse_value, lower=None, upper=None):
-    t = np.arange(len(volt))
-    fig, ax1 = plt.subplots(figsize=(12, 8))
-    ax2 = ax1.twinx()
-
-    ax1.plot(t, curr, color="g", label="Current")
-    ax1.set_ylabel("Current (A)", color="g")
-    ax1.tick_params(axis="y", labelcolor="g")
-    ax1.set_xticks([0])
-    ax1.set_xticklabels([date], rotation=45, ha="right")
-
-    ax2.plot(t, volt, "-r", label="Voltage (true)")
-    ax2.plot(t, pred, "-b" if lower is not None else "--r", label="Voltage (pred)" if lower is None else "Voltage (mean pred)")
-    if lower is not None and upper is not None:
-        ax2.fill_between(t, lower, upper, color="b", alpha=0.3, label="95% CI")
-    ax2.set_ylabel("Voltage (V)", color="r")
-    ax2.tick_params(axis="y", labelcolor="r")
-    ax2.text(
-        0.5,
-        0.95,
-        f"MSE = {mse_value:.4e}",
-        transform=ax2.transAxes,
-        ha="center",
-        va="top",
-        fontsize=10,
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", alpha=0.7),
-    )
-
-    l1, lab1 = ax1.get_legend_handles_labels()
-    l2, lab2 = ax2.get_legend_handles_labels()
-    ax1.legend(l1 + l2, lab1 + lab2, loc="upper right")
-
-    plt.tight_layout()
-    plt.show()
 
 
 def build_static_arg_parser(defaults: StaticExperimentDefaults) -> argparse.ArgumentParser:

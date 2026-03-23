@@ -7,7 +7,6 @@ import sys
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn import metrics
 from BattNN import BattNN
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "src" / "battery").exists())
@@ -15,19 +14,21 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from battery import BatteryRunDataset, fine_tune_battery_model, load_battery_checkpoint, save_battery_checkpoint
+from battery import (
+    BatteryRunDataset,
+    compute_error_metrics,
+    fine_tune_battery_model,
+    load_battery_checkpoint,
+    plot_rolling_prediction,
+    predict_with_uncertainty,
+    save_battery_checkpoint,
+)
 
 # reproducibility
 random.seed(2022)
 np.random.seed(2022)
 torch.manual_seed(2022)
 
-def eval_metrics(y_true, y_pred):
-    MAE  = metrics.mean_absolute_error     (y_true, y_pred)
-    MAPE = metrics.mean_absolute_percentage_error(y_true, y_pred)
-    MSE  = metrics.mean_squared_error      (y_true, y_pred)
-    RMSE = np.sqrt(MSE)
-    return [MAE, MAPE, MSE, RMSE]
 
 def train(args, train_x, train_y, model_name='BattNN'):
     if model_name == 'BattNN':
@@ -73,27 +74,6 @@ def get_args():
     # ignore Jupyter args
     args, _ = parser.parse_known_args()
     return args
-
-# ── Monte-Carlo predict without invoking your override of train() ─────────────
-def mc_predict(model, current_seq, mc_samples=100):
-    """
-    Perform MC forward passes to get mean & std of voltage predictions,
-    without calling model.eval() (which would break BattNN.train signature).
-    """
-    # temporarily set all submodules to eval mode via the base class method
-    base_train = torch.nn.Module.train
-    # switch off training behaviors
-    base_train(model, False)
-    preds = []
-    with torch.no_grad():
-        for _ in range(mc_samples):
-            v_pred, _ = model.predict(current_seq)   # [1, T]
-            preds.append(v_pred.cpu().numpy()[0])
-    # restore training mode
-    base_train(model, True)
-
-    stack = np.stack(preds, axis=0)  # [mc_samples, T]
-    return stack.mean(axis=0), stack.std(axis=0)
 
 # ── Rolling UQ digital‐twin demo ───────────────────────────────────────────────
 def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
@@ -143,33 +123,31 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
             dates_block.append(date)
 
             inp = torch.from_numpy(curr).to(args.device).view(1, -1)
-            mean_pred, std_pred = mc_predict(model, inp, mc_samples=mc_samples)
+            prediction = predict_with_uncertainty(model, inp, mc_samples=mc_samples, n_jobs=1)
+            mean_pred = prediction['mean']
+            std_pred = prediction['std']
 
-            met = eval_metrics(volt, mean_pred)
+            metrics_payload = compute_error_metrics(volt, mean_pred)
+            met = [metrics_payload['mae'], metrics_payload['mape'], metrics_payload['mse'], metrics_payload['rmse']]
             block_metrics.append(met)
 
             # plot
             t = np.arange(len(volt))
-            fig, ax = plt.subplots(figsize=(8,3))
-            ax.plot(t, volt,      '--k', label='True')
-            ax.plot(t, mean_pred, 'b-',  label='Mean pred')
-            ax.fill_between(t,
-                            mean_pred - std_pred,
-                            mean_pred + std_pred,
-                            alpha=0.3, color='b', label='±σ')
-            # MSE annotation at top-center
-            ax.text(0.5, 0.95,
-                    f"MSE = {met[2]:.4e}",
-                    transform=ax.transAxes,
-                    ha='center', va='top',
-                    fontsize=12,
-                    bbox=dict(fc="white", alpha=0.7))
-            ax.set_xlabel('Time step')
-            ax.set_ylabel('Voltage (V)')
-            ax.legend(loc='upper right')
-            plt.title(f"Iter {itr} Run {j}: {fn}")
-            plt.tight_layout()
-            plt.show()
+            fig, axes = plot_rolling_prediction(
+                volt,
+                mean_pred,
+                lower=mean_pred - std_pred,
+                upper=mean_pred + std_pred,
+                title=f"Iter {itr} Run {j}: {fn}",
+            )
+            axes[0].text(0.5, 0.95,
+                         f"MSE = {met[2]:.4e}",
+                         transform=axes[0].transAxes,
+                         ha='center', va='top',
+                         fontsize=12,
+                         bbox=dict(fc="white", alpha=0.7))
+            fig.tight_layout()
+            fig.show()
 
         # summarize iteration
         block_metrics = np.array(block_metrics)

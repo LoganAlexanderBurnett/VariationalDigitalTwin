@@ -7,7 +7,6 @@ import sys
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn import metrics
 from vBattNN import BattNN
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "src" / "battery").exists())
@@ -15,19 +14,21 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from battery import BatteryRunDataset, fine_tune_battery_model, load_battery_checkpoint, save_battery_checkpoint
+from battery import (
+    BatteryRunDataset,
+    compute_error_metrics,
+    fine_tune_battery_model,
+    load_battery_checkpoint,
+    plot_rolling_prediction,
+    predict_with_uncertainty,
+    save_battery_checkpoint,
+)
 
 # reproducibility
 random.seed(2022)
 np.random.seed(2022)
 torch.manual_seed(2022)
 
-def eval_metrics(y_true, y_pred):
-    MAE  = metrics.mean_absolute_error     (y_true, y_pred)
-    MAPE = metrics.mean_absolute_percentage_error(y_true, y_pred)
-    MSE  = metrics.mean_squared_error      (y_true, y_pred)
-    RMSE = np.sqrt(MSE)
-    return [MAE, MAPE, MSE, RMSE]
 
 def train(args, train_x, train_y, model_name='BattNN'):
     if model_name == 'BattNN':
@@ -73,51 +74,6 @@ def get_args():
     # ignore Jupyter args
     args, _ = parser.parse_known_args()
     return args
-
-
-from joblib import Parallel, delayed
-
-def mc_predict(model, current_seq, mc_samples=100, n_jobs=6):
-    """
-    Monte‐Carlo predict in parallel via joblib threads.
-    
-    Arguments:
-      model       : your trained BattNN or LSTM
-      current_seq : 1×T torch.Tensor of currents
-      mc_samples  : how many stochastic forward‐passes
-      n_jobs      : how many threads to use
-      
-    Returns:
-      mean: (T,) np.array
-      std:  (T,) np.array
-    """
-    device = next(model.parameters()).device
-
-    # temporarily set all submodules to eval mode via the base class method
-    base_train = torch.nn.Module.train
-    # switch off training behaviors
-    base_train(model, False)
-
-    def sample_prediction():
-        # each thread calls this
-        with torch.no_grad():
-            v_pred, _ = model.predict(current_seq)      # [1, T]
-        return v_pred.cpu().numpy()[0]             # (T,)
-
-    # Fire off mc_samples draws in parallel
-    preds = Parallel(n_jobs=n_jobs)(
-        delayed(sample_prediction)() 
-        for _ in range(mc_samples)
-    )
-    stack = np.stack(preds, axis=0)  # shape = (mc_samples, T)
-
-    # compute predictive mean
-    mean = stack.mean(axis=0)
-    # compute 2.5th and 97.5th percentiles
-    lower = np.percentile(stack, 2.5, axis=0)
-    upper = np.percentile(stack, 97.5, axis=0)
-    
-    return mean, lower, upper
 
 # ── Rolling UQ digital‐twin demo ───────────────────────────────────────────────
 def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
@@ -168,48 +124,34 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
             dates_block.append(date)
 
             inp = torch.from_numpy(curr).to(args.device).view(1, -1)
-            mean_pred, lower_pred, upper_pred = mc_predict(model, inp, mc_samples=mc_samples)
+            prediction = predict_with_uncertainty(model, inp, mc_samples=mc_samples)
+            mean_pred = prediction['mean']
+            lower_pred = prediction['lower']
+            upper_pred = prediction['upper']
 
-            met = eval_metrics(volt, mean_pred)
+            metrics_payload = compute_error_metrics(volt, mean_pred)
+            met = [metrics_payload['mae'], metrics_payload['mape'], metrics_payload['mse'], metrics_payload['rmse']]
             block_metrics.append(met)
 
             # plot
-            t = np.arange(len(volt))
-            fig, ax1 = plt.subplots(figsize=(8, 4))
-            # Voltage true and prediction
-            ax1.plot(t, volt,      '--k', label='True Voltage')
-            ax1.plot(t, mean_pred, 'b-',  label='Pred Mean Voltage')
-            ax1.fill_between(t,
-                             lower_pred,
-                             upper_pred,
-                             alpha=0.3, color='b', label='95% CI Voltage')
-            ax1.set_xlabel('Time step')
-            ax1.set_ylabel('Voltage (V)', color='b')
-            ax1.tick_params(axis='y', labelcolor='b')
-
-            # Secondary axis for current
-            ax2 = ax1.twinx()
-            ax2.plot(t, curr, '-r', label='Current')
-            ax2.set_ylabel('Current (A)', color='r')
-            ax2.tick_params(axis='y', labelcolor='r')
-
-            # MSE annotation at top-center
-            ax1.text(0.5, 0.95,
-                     f"MSE = {met[2]:.4e}",
-                     transform=ax1.transAxes,
-                     ha='center', va='top',
-                     fontsize=10,
-                     bbox=dict(boxstyle="round,pad=0.3",
-                               fc="white", ec="black", alpha=0.7))
-
-            # Legends combined
-            lines1, labels1 = ax1.get_legend_handles_labels()
-            lines2, labels2 = ax2.get_legend_handles_labels()
-            ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
-
-            plt.title(f"Iter {itr} Run {j}: {fn}")
-            plt.tight_layout()
-            plt.show()
+            fig, axes = plot_rolling_prediction(
+                volt,
+                mean_pred,
+                curr=curr,
+                lower=lower_pred,
+                upper=upper_pred,
+                title=f"Iter {itr} Run {j}: {fn}",
+                show_current_on_secondary_axis=True,
+            )
+            axes[0].text(0.5, 0.95,
+                         f"MSE = {met[2]:.4e}",
+                         transform=axes[0].transAxes,
+                         ha='center', va='top',
+                         fontsize=10,
+                         bbox=dict(boxstyle="round,pad=0.3",
+                                   fc="white", ec="black", alpha=0.7))
+            fig.tight_layout()
+            fig.show()
 
         # summarize iteration
         block_metrics = np.array(block_metrics)
