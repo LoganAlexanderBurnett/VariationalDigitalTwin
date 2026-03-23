@@ -22,14 +22,26 @@ from .data import (
     parse_run_date,
     sort_runs_chronologically,
 )
+from .evaluation import (
+    compute_error_metrics,
+    plot_rolling_prediction,
+    plot_static_prediction,
+    save_metrics_json,
+)
 from .losses import WeightedL1Loss, WeightedL2Loss
-from .evaluation import compute_error_metrics, plot_rolling_prediction, plot_static_prediction, save_metrics_json
-from .predict import predict_deterministic_run, predict_with_uncertainty
 from .models import (
     BaseVariationalLayer_,
     DeterministicBatteryModel,
     LinearReparameterization,
     VariationalBatteryModel,
+)
+from .predict import (
+    predict_deterministic_run,
+    predict_with_uncertainty,
+)
+from .rolling import (
+    run_deterministic_rolling_experiment,
+    run_variational_rolling_experiment,
 )
 from .static_workflow import (
     StaticExperimentDefaults,
@@ -57,10 +69,10 @@ __all__ = [
     "BatteryRunDataset",
     "DatasetConfig",
     "DeterministicBatteryModel",
-    "ModelConfig",
     "LinearReparameterization",
-    "RollingBlock",
+    "ModelConfig",
     "OutputConfig",
+    "RollingBlock",
     "RollingWindowConfig",
     "StaticExperimentDefaults",
     "StaticTrainTestSplit",
@@ -68,17 +80,12 @@ __all__ = [
     "VariationalBatteryModel",
     "WeightedL1Loss",
     "WeightedL2Loss",
-    "compute_error_metrics",
-    "plot_rolling_prediction",
-    "plot_static_prediction",
-    "predict_deterministic_run",
-    "predict_with_uncertainty",
-    "save_metrics_json",
     "build_optimizer",
     "build_rolling_experiment_config",
-    "build_static_experiment_config",
     "build_scheduler",
     "build_static_arg_parser",
+    "build_static_experiment_config",
+    "compute_error_metrics",
     "discover_run_files",
     "evaluate_static_model",
     "eval_metrics",
@@ -91,8 +98,15 @@ __all__ = [
     "load_static_train_test_split",
     "parse_args",
     "parse_run_date",
+    "plot_rolling_prediction",
+    "plot_static_prediction",
+    "predict_deterministic_run",
+    "predict_with_uncertainty",
+    "run_deterministic_rolling_experiment",
     "run_static_experiment",
+    "run_variational_rolling_experiment",
     "save_battery_checkpoint",
+    "save_metrics_json",
     "sort_runs_chronologically",
     "train_battery_deterministic",
     "train_battery_variational",
