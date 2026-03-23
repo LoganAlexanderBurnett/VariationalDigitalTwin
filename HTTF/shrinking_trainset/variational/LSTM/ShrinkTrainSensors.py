@@ -37,10 +37,9 @@ def shrink_train_set(
 
 
 def main():
-    data_dir = Path(__file__).resolve().parents[2]
-    train_orig = pd.read_csv(data_dir / 'TF_TS_train.csv')
-    valid_orig = pd.read_csv(data_dir / 'TF_TS_valid.csv')
-    test_orig = pd.read_csv(data_dir / 'TF_TS_test.csv')
+    train_orig = pd.read_csv('../../../dataset/static_dataset/TF_TS_train.csv')
+    valid_orig = pd.read_csv('../../../dataset/static_dataset/TF_TS_valid.csv')
+    test_orig = pd.read_csv('../../../dataset/static_dataset/TF_TS_test.csv')
 
     for df in (train_orig, valid_orig, test_orig):
         df['TS'] = df['TS'].interpolate()

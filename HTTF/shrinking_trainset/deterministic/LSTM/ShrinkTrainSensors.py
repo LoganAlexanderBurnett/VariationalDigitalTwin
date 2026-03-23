@@ -36,14 +36,14 @@ def shrink_train_set(
 
 
 def main():
-    train_orig = pd.read_csv('TF_TS_train.csv')
-    valid_orig = pd.read_csv('TF_TS_valid.csv')
-    test_orig = pd.read_csv('TF_TS_test.csv')
+    train_orig = pd.read_csv('../../../dataset/static_dataset/TF_TS_train.csv')
+    valid_orig = pd.read_csv('../../../dataset/static_dataset/TF_TS_valid.csv')
+    test_orig = pd.read_csv('../../../dataset/static_dataset/TF_TS_test.csv')
 
     for df in (train_orig, valid_orig, test_orig):
         df['TS'] = df['TS'].interpolate()
 
-    for n_removed in range(1, 63):
+    for n_removed in range(1, 62):
         shrink_train_set(train_orig, valid_orig, test_orig, n_removed)
 
 
