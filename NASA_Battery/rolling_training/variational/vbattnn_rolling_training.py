@@ -2,12 +2,20 @@ import os
 import copy
 import random
 import argparse
+from pathlib import Path
+import sys
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from datetime import datetime
 from sklearn import metrics
 from vBattNN import BattNN
+
+PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "src" / "battery").exists())
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from battery import BatteryRunDataset
 
 # reproducibility
 random.seed(2022)
@@ -118,42 +126,6 @@ def mc_predict(model, current_seq, mc_samples=100, n_jobs=6):
     
     return mean, lower, upper
 
-# ── Chrono-sorted loader ──────────────────────────────────────────────────────
-class NPZData:
-    def __init__(self, npz_dir, date_fmt="%d-%b-%Y %H:%M:%S"):
-        self.npz_dir = npz_dir
-        raw = sorted(f for f in os.listdir(npz_dir) if f.startswith('run_') and f.endswith('.npz'))      # filter negatives
-        admitted, removed = [], []
-        for fn in raw:
-            d = np.load(os.path.join(npz_dir, fn))
-            (removed if np.any(d['current'] < 0) else admitted).append(fn)
-        if removed: print("Removed neg-current runs:", removed)
-        # chrono-sort
-        dated = []
-        for fn in admitted:
-            d = np.load(os.path.join(npz_dir, fn))
-            dt = datetime.strptime(str(d['date'].item()), date_fmt)
-            dated.append((fn, dt))
-        dated.sort(key=lambda x: x[1])
-        self.files = [fn for fn, _ in dated]
-
-    def load_block(self, file_list, seq_len):
-        X, Y, dates = [], [], []
-        for fn in file_list:
-            d = np.load(os.path.join(self.npz_dir, fn))
-            c = d['current'].astype(np.float32)
-            v = d['voltage'].astype(np.float32)
-            date = str(d['date'].item())
-            # pad / truncate
-            if c.size < seq_len:
-                pad = seq_len - c.size
-                c = np.pad(c, (0, pad), 'edge')
-                v = np.pad(v, (0, pad), 'edge')
-            X.append(c[:seq_len])
-            Y.append(v[:seq_len])
-            dates.append(date)
-        return np.stack(X), np.stack(Y), dates
-
 # ── Rolling UQ digital‐twin demo ───────────────────────────────────────────────
 def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
                          model_name='BattNN', args=None,
@@ -169,14 +141,17 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
     Finally, plots mean metrics per iteration.
     """
     os.makedirs(save_dir, exist_ok=True)
-    D     = NPZData(npz_dir)
-    files = D.files
+    dataset = BatteryRunDataset.from_directory(npz_dir)
+    if dataset.removed_runs:
+        print("Removed neg-current runs:", list(dataset.removed_runs))
+    files = dataset.files
+    run_by_name = {run.file_name: run for run in dataset.runs}
     N     = len(files)
     print(f"{N} total runs, block size = {block}")
 
     # 1) initial training
     init_files = files[:block]
-    X0, Y0, _ = D.load_block(init_files, seq_len)
+    X0, Y0, _ = dataset.rolling_block(init_files).load_arrays(seq_len)
     args0 = copy.copy(args); args0.batch_size = block
     model = train(args0, X0, Y0, model_name=args0.model_name)
 
@@ -193,10 +168,10 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
 
         # 2a) MC-predict + plot each run
         for j, fn in enumerate(test_files, start=1):
-            d = np.load(os.path.join(npz_dir, fn))
-            curr = d['current'].astype(np.float32)
-            volt = d['voltage'].astype(np.float32)
-            date = str(d['date'].item())
+            run = run_by_name[fn]
+            curr = run.current
+            volt = run.voltage
+            date = run.date
             dates_block.append(date)
 
             inp = torch.from_numpy(curr).to(args.device).view(1, -1)
@@ -271,7 +246,7 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
         model = new_model.to(args.device)
 
         # 2d) fine-tune on this block
-        Xf, Yf, _ = D.load_block(test_files, seq_len)
+        Xf, Yf, _ = dataset.rolling_block(test_files).load_arrays(seq_len)
         argsf = copy.copy(args); argsf.batch_size = Xf.shape[0]
         model.config = argsf
         model.init_x = torch.tensor(

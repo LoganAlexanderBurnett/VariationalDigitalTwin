@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import os
 import random
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Iterable, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,8 +12,7 @@ import torch
 from joblib import Parallel, delayed
 from sklearn import metrics
 
-
-DEFAULT_DATE_FORMAT = "%d-%b-%Y %H:%M:%S"
+from .data import BatteryRun, BatteryRunDataset
 
 
 @dataclass(frozen=True)
@@ -48,62 +45,13 @@ class StaticExperimentDefaults:
         return 500 if self.mode == "variational" else 2000
 
 
-class NPZData:
-    def __init__(self, npz_dir: str = "../../dataset/", n: int = 50, length: int = 50, date_fmt: str = DEFAULT_DATE_FORMAT):
-        self.npz_dir = npz_dir
-        all_files = sorted(
-            f for f in os.listdir(npz_dir) if f.startswith("run_") and f.endswith(".npz")
-        )
-        admitted = []
-        removed = []
+def describe_removed_runs(dataset: BatteryRunDataset) -> None:
+    if dataset.removed_runs:
+        print("Removed runs due to negative current:", list(dataset.removed_runs))
+    else:
+        print("No runs removed due to negative current.")
 
-        for fname in all_files:
-            data = np.load(os.path.join(npz_dir, fname))
-            curr = np.asarray(data["current"])
-            if np.any(curr < 0):
-                removed.append(fname)
-            else:
-                admitted.append(fname)
 
-        if removed:
-            print("Removed runs due to negative current:", removed)
-        else:
-            print("No runs removed due to negative current.")
-
-        dated_files = []
-        for fname in admitted:
-            data = np.load(os.path.join(npz_dir, fname))
-            date_str = str(data["date"].item())
-            dt = datetime.strptime(date_str, date_fmt)
-            dated_files.append((fname, dt))
-
-        dated_files.sort(key=lambda x: x[1])
-        sorted_files = [fname for fname, _ in dated_files]
-
-        self.train_files = sorted_files[:n]
-        self.test_files = sorted_files[n:]
-        self.length = length
-
-    def load_train_data(self):
-        currents, voltages, dates = [], [], []
-        for fname in self.train_files:
-            data = np.load(os.path.join(self.npz_dir, fname))
-            curr = data["current"][: self.length].astype(np.float32)
-            volt = data["voltage"][: self.length].astype(np.float32)
-            date = str(data["date"].item())
-            if curr.size == self.length and volt.size == self.length:
-                currents.append(curr)
-                voltages.append(volt)
-                dates.append(date)
-        return np.stack(currents), np.stack(voltages), dates
-
-    def yield_test_data(self) -> Iterator[tuple[np.ndarray, np.ndarray, str]]:
-        for fname in self.test_files:
-            data = np.load(os.path.join(self.npz_dir, fname))
-            curr = data["current"].astype(np.float32)
-            volt = data["voltage"].astype(np.float32)
-            date = str(data["date"].item())
-            yield curr, volt, date
 
 
 def eval_metrics(y_true, y_pred):
@@ -143,13 +91,16 @@ def _mc_predict(model, current_seq, mc_samples=100, n_jobs=6):
     return mean, lower, upper
 
 
-def evaluate_static_model(args, data_iter: Callable[[], Iterable[tuple[np.ndarray, np.ndarray, str]]], model_cls):
+def evaluate_static_model(args, test_runs: Iterable[BatteryRun], model_cls):
     model = model_cls(args)
     model.load_model()
     model.init_x = model.init_x[:1, :]
 
     errors = []
-    for i, (curr, volt, date) in enumerate(data_iter(), start=1):
+    for i, run in enumerate(test_runs, start=1):
+        curr = run.current
+        volt = run.voltage
+        date = run.date
         current_tensor = torch.from_numpy(curr.astype(np.float32)).view(1, -1)
         if args.mode == "variational":
             current_tensor = current_tensor.to(args.device)
@@ -257,15 +208,17 @@ def run_static_experiment(args, model_cls):
     torch.manual_seed(2022)
 
     print("Arguments:", args)
-    data = NPZData(npz_dir=args.npz_dir, n=args.batch_size, length=args.seq_len)
-    train_x, train_y, train_dates = data.load_train_data()
+    dataset = BatteryRunDataset.from_directory(args.npz_dir)
+    describe_removed_runs(dataset)
+    split = dataset.static_split(train_count=args.batch_size)
+    train_x, train_y, train_dates = split.load_train_arrays(length=args.seq_len)
     print("Train shape:", train_x.shape, train_y.shape)
     print("Train dates:", train_dates)
 
     train_static_model(args, train_x, train_y, model_cls=model_cls)
     mean_error, errors = evaluate_static_model(
         args,
-        data_iter=data.yield_test_data,
+        test_runs=split.iter_test_runs(),
         model_cls=model_cls,
     )
 

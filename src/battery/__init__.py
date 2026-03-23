@@ -1,5 +1,18 @@
+from .data import (
+    BatteryRun,
+    BatteryRunDataset,
+    RollingBlock,
+    StaticTrainTestSplit,
+    discover_run_files,
+    filter_negative_current_runs,
+    has_negative_current,
+    load_battery_run,
+    load_rolling_block,
+    load_static_train_test_split,
+    parse_run_date,
+    sort_runs_chronologically,
+)
 from .static_workflow import (
-    NPZData,
     StaticExperimentDefaults,
     build_static_arg_parser,
     evaluate_static_model,
@@ -10,12 +23,23 @@ from .static_workflow import (
 )
 
 __all__ = [
-    'NPZData',
+    'BatteryRun',
+    'BatteryRunDataset',
+    'RollingBlock',
     'StaticExperimentDefaults',
+    'StaticTrainTestSplit',
     'build_static_arg_parser',
+    'discover_run_files',
     'evaluate_static_model',
     'eval_metrics',
+    'filter_negative_current_runs',
+    'has_negative_current',
+    'load_battery_run',
+    'load_rolling_block',
+    'load_static_train_test_split',
     'parse_args',
+    'parse_run_date',
     'run_static_experiment',
+    'sort_runs_chronologically',
     'train_static_model',
 ]
