@@ -18,7 +18,7 @@ from battery.models import DeterministicBatteryModel as BattNN
 DEFAULTS = StaticExperimentDefaults(
     model_module_name="BattNN",
     mode="deterministic",
-    train_runs=30,
+    train_runs=60,
     seq_len=30,
     epoch=2000,
 )

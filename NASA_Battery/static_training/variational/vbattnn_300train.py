@@ -18,7 +18,7 @@ from battery.models import VariationalBatteryModel as BattNN
 DEFAULTS = StaticExperimentDefaults(
     model_module_name="vBattNN",
     mode="variational",
-    train_runs=30,
+    train_runs=300,
     seq_len=30,
     epoch=500,
 )
