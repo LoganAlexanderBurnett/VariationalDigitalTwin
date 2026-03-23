@@ -15,7 +15,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from battery import BatteryRunDataset
+from battery import BatteryRunDataset, fine_tune_battery_model, load_battery_checkpoint, save_battery_checkpoint
 
 # reproducibility
 random.seed(2022)
@@ -30,7 +30,6 @@ def eval_metrics(y_true, y_pred):
     return [MAE, MAPE, MSE, RMSE]
 
 def train(args, train_x, train_y, model_name='BattNN'):
-    # 1) Create model
     if model_name == 'BattNN':
         model = BattNN(args)
         print("Selected model: BattNN")
@@ -40,14 +39,8 @@ def train(args, train_x, train_y, model_name='BattNN'):
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
-    # 2) Package data into the model
-    x_tensor = torch.from_numpy(train_x.astype(np.float32))
-    y_tensor = torch.from_numpy(train_y.astype(np.float32))
-    model.get_data(x=x_tensor, label=y_tensor)
-
-    # 3) Train
-    model.train()
-    return model  # in case you want to keep it around
+    model, _ = fine_tune_battery_model(model, train_x, train_y, args)
+    return model
     
 
 def get_args():
@@ -191,10 +184,8 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
         # 2b) save checkpoint named by last run date
         last_date = dates_block[-1]
         safe_date = last_date.replace(' ', '_').replace(':','-')
-        ckpt = {'net': model.state_dict()}
-        ckpt_path = os.path.join(save_dir,
-                                 f"{model_name}_{safe_date}.pth")
-        torch.save(ckpt, ckpt_path)
+        ckpt_path = os.path.join(save_dir, f"{model_name}_{safe_date}.pth")
+        save_battery_checkpoint(model, save_path=ckpt_path)
         print(f"Saved checkpoint to {ckpt_path}")
 
         # 2c) reload fresh model to reset optimizer/LR
@@ -202,19 +193,15 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
             new_model = BattNN(args0)
         else:
             new_model = LSTM(args0)
-        new_model.load_state_dict(torch.load(ckpt_path)['net'])
+        load_battery_checkpoint(new_model, ckpt_path, map_location=args.device)
         model = new_model.to(args.device)
 
         # 2d) fine-tune on this block
         Xf, Yf, _ = dataset.rolling_block(test_files).load_arrays(seq_len)
         argsf = copy.copy(args); argsf.batch_size = Xf.shape[0]
         model.config = argsf
-        model.init_x = torch.tensor(
-            argsf.x0, dtype=model.init_x.dtype,
-            device=model.init_x.device
-        ).repeat(argsf.batch_size, 1)
-        model.get_data(torch.from_numpy(Xf), torch.from_numpy(Yf))
-        model.train()
+        model.set_batch_size(argsf.batch_size)
+        model, _ = fine_tune_battery_model(model, Xf, Yf, argsf)
 
     # 3) plot iteration metrics
     iteration_metrics = np.stack(iteration_metrics)  # [n_iters, 4]

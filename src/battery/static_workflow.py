@@ -13,6 +13,11 @@ from joblib import Parallel, delayed
 from sklearn import metrics
 
 from .data import BatteryRun, BatteryRunDataset
+from .trainer import (
+    load_battery_checkpoint,
+    train_battery_deterministic,
+    train_battery_variational,
+)
 
 
 @dataclass(frozen=True)
@@ -62,15 +67,22 @@ def eval_metrics(y_true, y_pred):
     return [mae, mape, mse, rmse]
 
 
+def build_static_checkpoint_path(args) -> Path:
+    return Path(args.results_dir) / (
+        f"{args.results_prefix}-{args.save_model}-batch_size={args.batch_size}-seq_len={args.seq_len}.pkl"
+    )
+
+
 def train_static_model(args, train_x, train_y, model_cls):
     model = model_cls(args)
     print(f"Selected model: {args.model_name}")
     print(f"Training on {train_x.shape[0]} runs")
 
-    x_tensor = torch.from_numpy(train_x.astype(np.float32))
-    y_tensor = torch.from_numpy(train_y.astype(np.float32))
-    model.get_data(x=x_tensor, label=y_tensor)
-    model.train()
+    checkpoint_path = build_static_checkpoint_path(args)
+    if args.mode == "variational":
+        model, _ = train_battery_variational(model, train_x, train_y, args, save_path=checkpoint_path)
+    else:
+        model, _ = train_battery_deterministic(model, train_x, train_y, args, save_path=checkpoint_path)
     return model
 
 
@@ -93,8 +105,8 @@ def _mc_predict(model, current_seq, mc_samples=100, n_jobs=6):
 
 def evaluate_static_model(args, test_runs: Iterable[BatteryRun], model_cls):
     model = model_cls(args)
-    model.load_model()
-    model.init_x = model.init_x[:1, :]
+    load_battery_checkpoint(model, build_static_checkpoint_path(args), map_location=args.device)
+    model.set_batch_size(1)
 
     errors = []
     for i, run in enumerate(test_runs, start=1):
