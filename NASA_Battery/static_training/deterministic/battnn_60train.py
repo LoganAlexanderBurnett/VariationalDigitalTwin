@@ -12,7 +12,7 @@ from battery import (
     parse_args,
     run_static_experiment,
 )
-from BattNN import BattNN
+from battery.models import DeterministicBatteryModel as BattNN
 
 
 DEFAULTS = StaticExperimentDefaults(

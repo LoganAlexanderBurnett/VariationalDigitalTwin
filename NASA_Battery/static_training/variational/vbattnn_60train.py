@@ -12,7 +12,7 @@ from battery import (
     parse_args,
     run_static_experiment,
 )
-from vBattNN import BattNN
+from battery.models import VariationalBatteryModel as BattNN
 
 
 DEFAULTS = StaticExperimentDefaults(

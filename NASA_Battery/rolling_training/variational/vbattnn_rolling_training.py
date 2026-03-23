@@ -10,7 +10,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from battery import build_rolling_experiment_config, run_variational_rolling_experiment
-from vBattNN import BattNN
+from battery.models import VariationalBatteryModel as BattNN
 
 
 def get_args():
