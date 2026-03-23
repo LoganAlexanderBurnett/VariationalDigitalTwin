@@ -57,7 +57,7 @@ def get_args():
     parser.add_argument('--Cs',        type=float, default=500)
 
     # — Training / data params —
-    parser.add_argument('--batch_size', '-n', type=int,   default=30)
+    parser.add_argument('--train-runs', '--batch_size', '-n', dest='train_runs', type=int, default=30)
     parser.add_argument('--seq_len',    '-l', type=int,   default=30)
     parser.add_argument('--npz_dir',              default='../../dataset/')
 
@@ -70,6 +70,9 @@ def get_args():
     # — Model selection & saving —
     parser.add_argument('--model_name', choices=['BattNN','LSTM'], default='BattNN')
     parser.add_argument('--save_model', choices=[None,'NASA'], default='NASA')
+    parser.add_argument('--block-size', type=int, default=10)
+    parser.add_argument('--save-dir', default='./models')
+    parser.add_argument('--mc_samples', type=int, default=250)
 
     # ignore Jupyter args
     args, _ = parser.parse_known_args()
@@ -101,7 +104,7 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
     # 1) initial training
     init_files = files[:block]
     X0, Y0, _ = dataset.rolling_block(init_files).load_arrays(seq_len)
-    args0 = copy.copy(args); args0.batch_size = block
+    args0 = copy.copy(args); args0.batch_size = block; args0.train_runs = block
     model = train(args0, X0, Y0, model_name=args0.model_name)
 
     iteration_metrics = []
@@ -180,7 +183,7 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
 
         # 2d) fine-tune on this block
         Xf, Yf, _ = dataset.rolling_block(test_files).load_arrays(seq_len)
-        argsf = copy.copy(args); argsf.batch_size = Xf.shape[0]
+        argsf = copy.copy(args); argsf.batch_size = Xf.shape[0]; argsf.train_runs = Xf.shape[0]
         model.config = argsf
         model.set_batch_size(argsf.batch_size)
         model, _ = fine_tune_battery_model(model, Xf, Yf, argsf)
@@ -200,15 +203,28 @@ def rolling_fine_tune_uq(npz_dir, seq_len, block=5,
 
     return iteration_metrics, per_run_metrics
 
-args = get_args()
-iter_metrics, run_metrics = rolling_fine_tune_uq(
-    args.npz_dir, args.seq_len,
-    block=10,
-    model_name=args.model_name,
-    args=args,
-    mc_samples=250
-)
 
-all_runs = np.vstack(run_metrics)
-all_runs.shape
-np.savez(f'results/RollingVBattNN-{args.save_model}-batch_size={args.batch_size}-seq_len={args.seq_len}.npz', all_runs)
+
+def main():
+    args = get_args()
+    from battery import build_rolling_experiment_config
+    config = build_rolling_experiment_config(args, mode='variational')
+    namespace = config.to_namespace()
+    iter_metrics, run_metrics = rolling_fine_tune_uq(
+        namespace.npz_dir,
+        namespace.seq_len,
+        block=namespace.block_size,
+        model_name=namespace.model_name,
+        args=namespace,
+        mc_samples=namespace.mc_samples,
+        save_dir=namespace.save_dir,
+    )
+    all_runs = np.vstack(run_metrics)
+    np.savez(
+        f'results/RollingVBattNN-{namespace.save_model}-batch_size={namespace.train_runs}-seq_len={namespace.seq_len}.npz',
+        all_runs,
+    )
+
+
+if __name__ == '__main__':
+    main()

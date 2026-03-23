@@ -1,3 +1,13 @@
+from .config import (
+    BatteryExperimentConfig,
+    DatasetConfig,
+    ModelConfig,
+    OutputConfig,
+    RollingWindowConfig,
+    TrainingConfig,
+    build_rolling_experiment_config,
+    build_static_experiment_config,
+)
 from .data import (
     BatteryRun,
     BatteryRunDataset,
@@ -42,13 +52,19 @@ from .trainer import (
 
 __all__ = [
     "BaseVariationalLayer_",
+    "BatteryExperimentConfig",
     "BatteryRun",
     "BatteryRunDataset",
+    "DatasetConfig",
     "DeterministicBatteryModel",
+    "ModelConfig",
     "LinearReparameterization",
     "RollingBlock",
+    "OutputConfig",
+    "RollingWindowConfig",
     "StaticExperimentDefaults",
     "StaticTrainTestSplit",
+    "TrainingConfig",
     "VariationalBatteryModel",
     "WeightedL1Loss",
     "WeightedL2Loss",
@@ -59,6 +75,8 @@ __all__ = [
     "predict_with_uncertainty",
     "save_metrics_json",
     "build_optimizer",
+    "build_rolling_experiment_config",
+    "build_static_experiment_config",
     "build_scheduler",
     "build_static_arg_parser",
     "discover_run_files",

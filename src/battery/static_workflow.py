@@ -72,7 +72,7 @@ def eval_metrics(y_true, y_pred):
 
 def build_static_checkpoint_path(args) -> Path:
     return Path(args.results_dir) / (
-        f"{args.results_prefix}-{args.save_model}-batch_size={args.batch_size}-seq_len={args.seq_len}.pkl"
+        f"{args.results_prefix}-{args.save_model}-batch_size={args.train_runs}-seq_len={args.seq_len}.pkl"
     )
 
 
@@ -155,7 +155,7 @@ def build_static_arg_parser(defaults: StaticExperimentDefaults) -> argparse.Argu
     parser.add_argument("--Rs", type=float, default=defaults.Rs)
     parser.add_argument("--Csp", type=float, default=defaults.Csp)
     parser.add_argument("--Cs", type=float, default=defaults.Cs)
-    parser.add_argument("--batch_size", "-n", type=int, default=defaults.train_runs)
+    parser.add_argument("--train-runs", "--batch_size", "-n", dest="train_runs", type=int, default=defaults.train_runs)
     parser.add_argument("--seq_len", "-l", type=int, default=defaults.seq_len)
     parser.add_argument("--npz_dir", default=defaults.npz_dir)
     parser.add_argument("--device", default=defaults.device)
@@ -187,7 +187,7 @@ def run_static_experiment(args, model_cls):
     print("Arguments:", args)
     dataset = BatteryRunDataset.from_directory(args.npz_dir)
     describe_removed_runs(dataset)
-    split = dataset.static_split(train_count=args.batch_size)
+    split = dataset.static_split(train_count=args.train_runs)
     train_x, train_y, train_dates = split.load_train_arrays(length=args.seq_len)
     print("Train shape:", train_x.shape, train_y.shape)
     print("Train dates:", train_dates)
@@ -202,7 +202,7 @@ def run_static_experiment(args, model_cls):
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     result_path = results_dir / (
-        f"{args.results_prefix}-{args.save_model}-batch_size={args.batch_size}-seq_len={args.seq_len}.npz"
+        f"{args.results_prefix}-{args.save_model}-batch_size={args.train_runs}-seq_len={args.seq_len}.npz"
     )
     np.savez(result_path, errors=errors)
     print("Saved errors to", result_path)

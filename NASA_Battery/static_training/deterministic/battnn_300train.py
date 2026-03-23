@@ -6,14 +6,19 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from battery import StaticExperimentDefaults, parse_args, run_static_experiment
+from battery import (
+    StaticExperimentDefaults,
+    build_static_experiment_config,
+    parse_args,
+    run_static_experiment,
+)
 from BattNN import BattNN
 
 
 DEFAULTS = StaticExperimentDefaults(
     model_module_name="BattNN",
     mode="deterministic",
-    train_runs=300,
+    train_runs=30,
     seq_len=30,
     epoch=2000,
 )
@@ -21,7 +26,9 @@ DEFAULTS = StaticExperimentDefaults(
 
 def main():
     args = parse_args(DEFAULTS)
-    return run_static_experiment(args, model_cls=BattNN)
+    config = build_static_experiment_config(args)
+    namespace = config.to_namespace()
+    return run_static_experiment(namespace, model_cls=BattNN)
 
 
 if __name__ == "__main__":
