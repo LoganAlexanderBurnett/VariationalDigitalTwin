@@ -1,269 +1,189 @@
-import os
+from __future__ import annotations
+
 import json
-import pandas as pd
+from pathlib import Path
+from typing import Iterable
+
 import matplotlib.pyplot as plt
 import numpy as np
-
-import os
-import json
-import pandas as pd
-
-def collect_metrics_from(model_dir):
-    """
-    Given a directory like 'VGRU_finalrun' or 'VLSTM_finalrun',
-    finds all 'shrink_train_*' subdirectories, loads their
-    performance_metrics.json, and returns a sorted DataFrame.
-    """
-    if not os.path.isdir(model_dir):
-        raise FileNotFoundError(f"Directory not found: {model_dir}")
-
-    # 1) Discover & sort shrink_train directories inside model_dir
-    shrink_dirs = sorted(
-        [
-            d for d in os.listdir(model_dir)
-            if os.path.isdir(os.path.join(model_dir, d)) and d.startswith('shrink_train_')
-        ],
-        key=lambda x: int(x.split('_')[2])
-    )
-
-    # 2) Collect metrics into a list of dicts
-    records = []
-    for d in shrink_dirs:
-        full_path = os.path.join(model_dir, d)
-        metrics_path = os.path.join(full_path, 'performance_metrics.json')
-        if not os.path.exists(metrics_path):
-            print(f"Warning: no metrics in {full_path}, skipping")
-            continue
-
-        with open(metrics_path, 'r') as f:
-            metrics = json.load(f)
-
-        # parse out N_removed from the directory name
-        N = int(d.split('_')[2])
-        rec = {'N_removed': N}
-
-        # flatten output_1 and output_2 metrics
-        for output in ['output_1', 'output_2']:
-            for m in ['r2', 'mae', 'mape', 'rmse', 'rmspe']:
-                rec[f"{output}_{m}"] = metrics.get(output, {}).get(m, None)
-
-        records.append(rec)
-
-    # 3) Build and sort DataFrame
-    df = pd.DataFrame(records)
-    df = df.sort_values('N_removed').reset_index(drop=True)
-    # Add a column for N_sensors (reverse of N_removed)
-    df['N_sensors'] = df['N_removed'].iloc[::-1].values
-    return df
-
-# Specify the two model directories
-model_dirs = ['VGRU_finalrun', 'VLSTM_finalrun']
-
-# Collect into a dict of DataFrames
-dfs = {}
-for mdl in model_dirs:
-    try:
-        dfs[mdl] = collect_metrics_from(mdl)
-    except FileNotFoundError as e:
-        print(e)
-        dfs[mdl] = pd.DataFrame()  # empty DataFrame if directory not found
-
-# Now dfs['VGRU_finalrun'] and dfs['VLSTM_finalrun'] are your two DataFrames:
-df_vgru  = dfs['VGRU_finalrun']
-df_vlstm = dfs['VLSTM_finalrun']
-
-# (Optional) Display them
-print("VGRU metrics:")
-print(df_vgru.head(), "\n")
-print("VLSTM metrics:")
-print(df_vlstm.head())
-
-import os
-import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib import gridspec
 
-# --- Helper to compute average CI width per output for each shrink_train dir ---
-def compute_avg_ci_widths_per_output(model_dir):
-    """
-    For each 'shrink_train_{N}' under model_dir, load 'Ypred.npy' (shape (T, 2, 3)).
-    Compute width = (upper_ci − lower_ci) separately for output 1 and output 2:
-      widths_TS = Ypred[:, 0, 2] − Ypred[:, 0, 1]
-      widths_TF = Ypred[:, 1, 2] − Ypred[:, 1, 1]
-    Then average over all T to get two scalars per N. Returns:
-      Ns (sorted list), avg_TS, avg_TF  (each a list aligned with Ns).
-    """
-    shrink_dirs = sorted(
-        [
-            d for d in os.listdir(model_dir)
-            if os.path.isdir(os.path.join(model_dir, d)) and d.startswith('shrink_train_')
-        ],
-        key=lambda x: int(x.split('_')[2])
-    )
-    Ns = []
-    avg_TS = []
-    avg_TF = []
-    for d in shrink_dirs:
-        N = int(d.split('_')[2])
-        pfile = os.path.join(model_dir, d, 'Ypred.npy')
-        if not os.path.exists(pfile):
-            print(f"Warning: Ypred.npy not found in {os.path.join(model_dir, d)}; skipping")
+SHRINK_DIR_PREFIX = "shrink_train_"
+METRIC_NAMES = ("r2", "mae", "mape", "rmse", "rmspe")
+METRIC_SPECS = {
+    "R²": {"key": "r2", "ylabel": r"$R^2$", "ylim": (0.5, 1.03)},
+    "MAE": {"key": "mae", "ylabel": "MAE (°C)"},
+    "RMSE": {"key": "rmse", "ylabel": "RMSE (°C)"},
+}
+MODEL_CONFIGS = {
+    "vGRU": {
+        "directory": "GRU",
+        "marker": "o",
+        "colors": {"TS": "dodgerblue", "TF": "mediumseagreen"},
+    },
+    "vLSTM": {
+        "directory": "LSTM",
+        "marker": "D",
+        "colors": {"TS": "orangered", "TF": "goldenrod"},
+    },
+}
+OUTPUT_CONFIGS = {
+    "TS": {"metric_key": "output_1", "ypred_idx": 0},
+    "TF": {"metric_key": "output_2", "ypred_idx": 1},
+}
+
+
+def iter_shrink_dirs(model_dir: Path) -> Iterable[tuple[int, Path]]:
+    """Yield `(N_removed, path)` pairs sorted by removed sensor count."""
+    if not model_dir.is_dir():
+        raise FileNotFoundError(f"Directory not found: {model_dir}")
+
+    shrink_dirs: list[tuple[int, Path]] = []
+    for path in model_dir.iterdir():
+        if not path.is_dir() or not path.name.startswith(SHRINK_DIR_PREFIX):
+            continue
+        try:
+            n_removed = int(path.name.removeprefix(SHRINK_DIR_PREFIX))
+        except ValueError:
+            print(f"Warning: unexpected directory name '{path.name}', skipping")
+            continue
+        shrink_dirs.append((n_removed, path))
+
+    yield from sorted(shrink_dirs, key=lambda item: item[0])
+
+
+def collect_metrics(model_dir: Path) -> dict[str, list[float]]:
+    """Collect performance metrics for a model directory."""
+    series: dict[str, list[float]] = {"N_removed": []}
+    for output_cfg in OUTPUT_CONFIGS.values():
+        for metric_name in METRIC_NAMES:
+            series[f"{output_cfg['metric_key']}_{metric_name}"] = []
+
+    for n_removed, shrink_dir in iter_shrink_dirs(model_dir):
+        metrics_path = shrink_dir / "performance_metrics.json"
+        if not metrics_path.exists():
+            print(f"Warning: missing metrics file in {shrink_dir}, skipping")
             continue
 
-        Ypred = np.load(pfile)  # shape (T, 2, 3)
-        # width for TS (output 1) and TF (output 2)
-        width_TS = Ypred[:, 0, 2] - Ypred[:, 0, 1]  # shape (T,)
-        width_TF = Ypred[:, 1, 2] - Ypred[:, 1, 1]  # shape (T,)
-        avg_TS.append(width_TS.mean())
-        avg_TF.append(width_TF.mean())
-        Ns.append(N)
+        with metrics_path.open("r", encoding="utf-8") as file:
+            metrics = json.load(file)
 
-    return Ns, avg_TS, avg_TF
+        series["N_removed"].append(n_removed)
+        for output_cfg in OUTPUT_CONFIGS.values():
+            output_metrics = metrics.get(output_cfg["metric_key"], {})
+            for metric_name in METRIC_NAMES:
+                value = output_metrics.get(metric_name)
+                series[f"{output_cfg['metric_key']}_{metric_name}"].append(value)
 
-# --- Assume df_vgru and df_vlstm already exist as before ---
+    return series
 
-# 1) Compute average CI widths per output for both models
-vgru_Ns,  vgru_avg_TS,  vgru_avg_TF  = compute_avg_ci_widths_per_output('VGRU_finalrun')
-vlstm_Ns, vlstm_avg_TS, vlstm_avg_TF = compute_avg_ci_widths_per_output('VLSTM_finalrun')
 
-# 2) Define column names and y-labels for each metric/output
-metrics = {
-    'R²':   {'col1': 'output_1_r2',  'col2': 'output_2_r2',  'ylabel': r'$R^2$'},
-    'MAE':  {'col1': 'output_1_mae', 'col2': 'output_2_mae', 'ylabel': 'MAE (°C)'},
-    'RMSE': {'col1': 'output_1_rmse','col2': 'output_2_rmse','ylabel': 'RMSE (°C)'}
-}
+def compute_avg_ci_widths(model_dir: Path) -> dict[str, list[float]]:
+    """Compute average confidence interval width for each output."""
+    widths = {"N_removed": [], "TS": [], "TF": []}
 
-# 3) Define a distinct color mapping for (model, output)
-line_colors = {
-    ('vGRU', 'TS'): 'dodgerblue',
-    ('vGRU', 'TF'): 'mediumseagreen',
-    ('vLSTM', 'TS'): 'orangered',
-    ('vLSTM', 'TF'): 'gold'
-}
+    for n_removed, shrink_dir in iter_shrink_dirs(model_dir):
+        prediction_path = shrink_dir / "Ypred.npy"
+        if not prediction_path.exists():
+            print(f"Warning: missing prediction array in {shrink_dir}, skipping")
+            continue
 
-# 4) Define markers by model
-model_markers = {
-    'vGRU':  'o',
-    'vLSTM': 'D'
-}
+        y_pred = np.load(prediction_path)
+        if y_pred.ndim != 3 or y_pred.shape[1] < 2 or y_pred.shape[2] < 3:
+            print(f"Warning: unexpected Ypred shape {y_pred.shape} in {shrink_dir}, skipping")
+            continue
 
-# 5) Create figure and 2×2 GridSpec
-fig = plt.figure(figsize=(12, 8))
-gs = gridspec.GridSpec(
-    nrows=2,
-    ncols=2,
-    height_ratios=[1, 1],
-    hspace=0.2,
-    wspace=0.2
-)
+        widths["N_removed"].append(n_removed)
+        for output_name, output_cfg in OUTPUT_CONFIGS.items():
+            output_pred = y_pred[:, output_cfg["ypred_idx"], :]
+            widths[output_name].append(np.mean(output_pred[:, 2] - output_pred[:, 1]))
 
-# 6) Top-left: R² plot (in gs[0,0])
-ax_r2 = fig.add_subplot(gs[0, 0])
-for model_label, df in [('vGRU', df_vgru), ('vLSTM', df_vlstm)]:
-    for output_idx, output_name in [(1, 'TS'), (2, 'TF')]:
-        colname = metrics['R²'][f'col{output_idx}']
-        ax_r2.plot(
-            df['N_removed'],
-            df[colname],
-            color=line_colors[(model_label, output_name)],
-            marker=model_markers[model_label],
-            linestyle='-',
-            alpha=0.5,
-            label=f"{model_label} {output_name}"
-        )
+    return widths
 
-ax_r2.set_xlabel("Number of Sensors Removed", fontsize=12)
-ax_r2.set_ylabel(metrics['R²']['ylabel'], fontsize=12)
-ax_r2.set_ylim(0.5, 1.03)
-ax_r2.legend(loc='best', fontsize=10)
-ax_r2.grid(alpha=0.3)
 
-# 7) Top-right: Avg. CI width per output (in gs[0,1])
-ax_ci = fig.add_subplot(gs[0, 1])
-# vGRU TS & TF
-ax_ci.plot(
-    vgru_Ns,
-    vgru_avg_TS,
-    color=line_colors[('vGRU', 'TS')],
-    marker=model_markers['vGRU'],
-    linestyle='-',
-    alpha=0.5,
-    label='vGRU TS'
-)
-ax_ci.plot(
-    vgru_Ns,
-    vgru_avg_TF,
-    color=line_colors[('vGRU', 'TF')],
-    marker=model_markers['vGRU'],
-    linestyle='-',
-    alpha=0.5,
-    label='vGRU TF'
-)
-# vLSTM TS & TF
-ax_ci.plot(
-    vlstm_Ns,
-    vlstm_avg_TS,
-    color=line_colors[('vLSTM', 'TS')],
-    marker=model_markers['vLSTM'],
-    linestyle='-',
-    alpha=0.5,
-    label='vLSTM TS'
-)
-ax_ci.plot(
-    vlstm_Ns,
-    vlstm_avg_TF,
-    color=line_colors[('vLSTM', 'TF')],
-    marker=model_markers['vLSTM'],
-    linestyle='-',
-    alpha=0.5,
-    label='vLSTM TF'
-)
+def plot_metric(ax: plt.Axes, model_series: dict[str, dict[str, list[float]]], title: str) -> None:
+    """Plot a single metric axis for all models and outputs."""
+    metric_spec = METRIC_SPECS[title]
 
-ax_ci.set_xlabel("Number of Sensors Removed", fontsize=12)
-ax_ci.set_ylabel("Avg. CI Width (°C)", fontsize=12)
-ax_ci.legend(loc='best', fontsize=10)
-ax_ci.grid(alpha=0.3)
+    for model_label, config in MODEL_CONFIGS.items():
+        series = model_series[model_label]
+        if not series["N_removed"]:
+            continue
 
-# 8) Bottom-left: MAE plot (in gs[1,0])
-ax_mae = fig.add_subplot(gs[1, 0])
-for model_label, df in [('vGRU', df_vgru), ('vLSTM', df_vlstm)]:
-    for output_idx, output_name in [(1, 'TS'), (2, 'TF')]:
-        colname = metrics['MAE'][f'col{output_idx}']
-        ax_mae.plot(
-            df['N_removed'],
-            df[colname],
-            color=line_colors[(model_label, output_name)],
-            marker=model_markers[model_label],
-            linestyle='-',
-            alpha=0.5,
-            label=f"{model_label} {output_name}"
-        )
+        for output_name, output_cfg in OUTPUT_CONFIGS.items():
+            ax.plot(
+                series["N_removed"],
+                series[f"{output_cfg['metric_key']}_{metric_spec['key']}"],
+                color=config["colors"][output_name],
+                marker=config["marker"],
+                linestyle="-",
+                alpha=0.7,
+                label=f"{model_label} {output_name}",
+            )
 
-ax_mae.set_xlabel("Number of Sensors Removed", fontsize=12)
-ax_mae.set_ylabel(metrics['MAE']['ylabel'], fontsize=12)
-ax_mae.legend(loc='best', fontsize=10)
-ax_mae.grid(alpha=0.3)
+    ax.set_xlabel("Number of Sensors Removed", fontsize=12)
+    ax.set_ylabel(metric_spec["ylabel"], fontsize=12)
+    if "ylim" in metric_spec:
+        ax.set_ylim(*metric_spec["ylim"])
+    ax.grid(alpha=0.3)
+    ax.legend(loc="best", fontsize=10)
 
-# 9) Bottom-right: RMSE plot (in gs[1,1])
-ax_rmse = fig.add_subplot(gs[1, 1])
-for model_label, df in [('vGRU', df_vgru), ('vLSTM', df_vlstm)]:
-    for output_idx, output_name in [(1, 'TS'), (2, 'TF')]:
-        colname = metrics['RMSE'][f'col{output_idx}']
-        ax_rmse.plot(
-            df['N_removed'],
-            df[colname],
-            color=line_colors[(model_label, output_name)],
-            marker=model_markers[model_label],
-            linestyle='-',
-            alpha=0.5,
-            label=f"{model_label} {output_name}"
-        )
 
-ax_rmse.set_xlabel("Number of Sensors Removed", fontsize=12)
-ax_rmse.set_ylabel(metrics['RMSE']['ylabel'], fontsize=12)
-ax_rmse.legend(loc='best', fontsize=10)
-ax_rmse.grid(alpha=0.3)
+def plot_ci_widths(ax: plt.Axes, ci_width_series: dict[str, dict[str, list[float]]]) -> None:
+    """Plot average CI width for all models and outputs."""
+    for model_label, config in MODEL_CONFIGS.items():
+        series = ci_width_series[model_label]
+        if not series["N_removed"]:
+            continue
 
-plt.tight_layout()
-fig.savefig('HTTF_shrink_metrics.png', dpi=300, bbox_inches='tight')
-plt.show()
+        for output_name in OUTPUT_CONFIGS:
+            ax.plot(
+                series["N_removed"],
+                series[output_name],
+                color=config["colors"][output_name],
+                marker=config["marker"],
+                linestyle="-",
+                alpha=0.7,
+                label=f"{model_label} {output_name}",
+            )
+
+    ax.set_xlabel("Number of Sensors Removed", fontsize=12)
+    ax.set_ylabel("Avg. CI Width (°C)", fontsize=12)
+    ax.grid(alpha=0.3)
+    ax.legend(loc="best", fontsize=10)
+
+
+def main() -> None:
+    base_dir = Path(__file__).resolve().parent
+    model_metric_series: dict[str, dict[str, list[float]]] = {}
+    model_ci_width_series: dict[str, dict[str, list[float]]] = {}
+
+    for model_label, config in MODEL_CONFIGS.items():
+        model_dir = base_dir / config["directory"]
+        try:
+            model_metric_series[model_label] = collect_metrics(model_dir)
+            model_ci_width_series[model_label] = compute_avg_ci_widths(model_dir)
+        except FileNotFoundError as error:
+            print(error)
+            model_metric_series[model_label] = {"N_removed": []}
+            model_ci_width_series[model_label] = {"N_removed": [], "TS": [], "TF": []}
+
+    for model_label, series in model_metric_series.items():
+        print(f"{model_label} metrics points: {len(series['N_removed'])}")
+
+    fig = plt.figure(figsize=(12, 8))
+    grid = gridspec.GridSpec(nrows=2, ncols=2, hspace=0.2, wspace=0.2)
+
+    plot_metric(fig.add_subplot(grid[0, 0]), model_metric_series, "R²")
+    plot_ci_widths(fig.add_subplot(grid[0, 1]), model_ci_width_series)
+    plot_metric(fig.add_subplot(grid[1, 0]), model_metric_series, "MAE")
+    plot_metric(fig.add_subplot(grid[1, 1]), model_metric_series, "RMSE")
+
+    fig.tight_layout()
+    output_path = base_dir / "HTTF_shrink_metrics.png"
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
