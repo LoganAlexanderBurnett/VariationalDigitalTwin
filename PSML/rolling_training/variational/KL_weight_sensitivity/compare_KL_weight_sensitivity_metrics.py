@@ -8,7 +8,7 @@ import pandas as pd
 EXPECTED_WEIGHTS = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]
 
 
-def _compute_uncertainty_error_spearman(vgru_test_csv: Path) -> tuple[float, float]:
+def _compute_uncertainty_metrics_from_vgrutest(vgru_test_csv: Path) -> dict:
     df = pd.read_csv(vgru_test_csv)
 
     solar_abs_error = (df["True Solar"] - df["Predicted Mean Solar"]).abs()
@@ -17,12 +17,21 @@ def _compute_uncertainty_error_spearman(vgru_test_csv: Path) -> tuple[float, flo
     solar_interval_width = df["Upper CI Solar"] - df["Lower CI Solar"]
     wind_interval_width = df["Upper CI Wind"] - df["Lower CI Wind"]
 
+    solar_coverage = ((df["True Solar"] >= df["Lower CI Solar"]) & (df["True Solar"] <= df["Upper CI Solar"])).mean()
+    wind_coverage = ((df["True Wind"] >= df["Lower CI Wind"]) & (df["True Wind"] <= df["Upper CI Wind"])).mean()
+
     solar_spearman = solar_interval_width.corr(solar_abs_error, method="spearman")
     wind_spearman = wind_interval_width.corr(wind_abs_error, method="spearman")
-    return solar_spearman, wind_spearman
+
+    return {
+        "coverage_solar": float(solar_coverage),
+        "coverage_wind": float(wind_coverage),
+        "spearman_corr_uncertainty_error_solar": float(solar_spearman),
+        "spearman_corr_uncertainty_error_wind": float(wind_spearman),
+    }
 
 
-def _load_session_metrics(case_dir: Path, kl_weight: float) -> pd.DataFrame:
+def _load_session_metrics_with_uncertainty(case_dir: Path, kl_weight: float) -> pd.DataFrame:
     session_metrics_path = case_dir / "session_metrics_summary.csv"
     if not session_metrics_path.exists():
         return pd.DataFrame()
@@ -31,8 +40,28 @@ def _load_session_metrics(case_dir: Path, kl_weight: float) -> pd.DataFrame:
     if session_df.empty:
         return pd.DataFrame()
 
+    session_uncertainty_rows = []
+    for _, row in session_df.iterrows():
+        session_idx = int(row["session"])
+        session_vgrutest = case_dir / f"session_{session_idx:03d}" / "vGRUTest.csv"
+
+        if session_vgrutest.exists():
+            uncertainty_metrics = _compute_uncertainty_metrics_from_vgrutest(session_vgrutest)
+        else:
+            uncertainty_metrics = {
+                "coverage_solar": float("nan"),
+                "coverage_wind": float("nan"),
+                "spearman_corr_uncertainty_error_solar": float("nan"),
+                "spearman_corr_uncertainty_error_wind": float("nan"),
+            }
+
+        session_uncertainty_rows.append(uncertainty_metrics)
+
+    uncertainty_df = pd.DataFrame(session_uncertainty_rows)
+    session_df = pd.concat([session_df.reset_index(drop=True), uncertainty_df], axis=1)
     session_df["kl_weight"] = kl_weight
     session_df["case_dir"] = case_dir.name
+
     return session_df
 
 
@@ -58,10 +87,11 @@ def load_metrics(results_root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         metric_row = case_metrics.iloc[0].to_dict()
 
         if vgru_test_path.exists():
-            solar_spearman, wind_spearman = _compute_uncertainty_error_spearman(vgru_test_path)
-            metric_row["spearman_corr_uncertainty_error_solar"] = solar_spearman
-            metric_row["spearman_corr_uncertainty_error_wind"] = wind_spearman
+            uncertainty_metrics = _compute_uncertainty_metrics_from_vgrutest(vgru_test_path)
+            metric_row.update(uncertainty_metrics)
         else:
+            metric_row["coverage_solar"] = float("nan")
+            metric_row["coverage_wind"] = float("nan")
             metric_row["spearman_corr_uncertainty_error_solar"] = float("nan")
             metric_row["spearman_corr_uncertainty_error_wind"] = float("nan")
 
@@ -73,7 +103,7 @@ def load_metrics(results_root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         case_records.append(metric_row)
 
-        session_df = _load_session_metrics(case_dir, kl_weight)
+        session_df = _load_session_metrics_with_uncertainty(case_dir, kl_weight)
         if not session_df.empty:
             session_frames.append(session_df)
 
@@ -136,17 +166,17 @@ def save_session_behavior_pdf(session_df: pd.DataFrame, output_pdf: Path):
     pages = [
         {
             "output": "Solar",
+            "coverage": "coverage_solar",
+            "spearman": "spearman_corr_uncertainty_error_solar",
             "r2": "solar_r2",
-            "mae": "solar_mae",
             "rmse": "solar_rmse",
-            "avg": "avg_rmse",
         },
         {
             "output": "Wind",
+            "coverage": "coverage_wind",
+            "spearman": "spearman_corr_uncertainty_error_wind",
             "r2": "wind_r2",
-            "mae": "wind_mae",
             "rmse": "wind_rmse",
-            "avg": "avg_rmse",
         },
     ]
 
@@ -154,18 +184,36 @@ def save_session_behavior_pdf(session_df: pd.DataFrame, output_pdf: Path):
         for page in pages:
             fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
 
-            _plot_metric_vs_session(axes[0, 0], session_df, page["r2"], f"{page['output']} R² by Session", "R²")
-            _plot_metric_vs_session(axes[0, 1], session_df, page["mae"], f"{page['output']} MAE by Session", "MAE")
-            _plot_metric_vs_session(axes[1, 0], session_df, page["rmse"], f"{page['output']} RMSE by Session", "RMSE")
+            _plot_metric_vs_session(
+                axes[0, 0],
+                session_df,
+                page["coverage"],
+                f"{page['output']} Coverage by Session",
+                "Coverage",
+            )
+            _plot_metric_vs_session(
+                axes[0, 1],
+                session_df,
+                page["spearman"],
+                f"{page['output']} Spearman(width,error) by Session",
+                "Spearman ρ",
+            )
+            _plot_metric_vs_session(
+                axes[1, 0],
+                session_df,
+                page["r2"],
+                f"{page['output']} R² by Session",
+                "R²",
+            )
             _plot_metric_vs_session(
                 axes[1, 1],
                 session_df,
-                page["avg"],
-                f"Reference Average Metric by Session ({page['output']})",
-                page["avg"],
+                page["rmse"],
+                f"{page['output']} RMSE by Session",
+                "RMSE",
             )
 
-            fig.suptitle(f"Session-wise Metric Behavior Across KL Weights — {page['output']}", fontsize=14)
+            fig.suptitle(f"Session-wise Metrics Across KL Weights — {page['output']}", fontsize=14)
             fig.tight_layout(rect=[0, 0, 1, 0.96])
             pdf.savefig(fig)
             plt.close(fig)
