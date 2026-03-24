@@ -54,7 +54,7 @@ data
 X, y = feature_label_split(data, targets=['solar_power', 'wind_power'], drop_cols=['load_power'])
 
 # Split data
-X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, 0.80, 0.10, 0.10)
+X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, 0.70, 0.15, 0.15)
 
 # Scaling
 scaler_X = MinMaxScaler()

@@ -55,7 +55,7 @@ X, y = feature_label_split(data, targets=['solar_power', 'wind_power'], drop_col
 
 # Split data
 #X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, train_fraction=0.20, validation_fraction=0.20, test_fraction=0.60)
-X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, 0.2, 0.2, 0.6)
+X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(X, y, 0.70, 0.15, 0.15)
 
 
 # Scaling
