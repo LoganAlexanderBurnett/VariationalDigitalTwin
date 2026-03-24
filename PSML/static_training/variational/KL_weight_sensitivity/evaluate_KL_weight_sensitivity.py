@@ -131,7 +131,12 @@ def save_prediction_plots(mean_predictions, true_values, lower_ci, upper_ci, out
         plt.close()
 
 
-def compute_metrics(true_values, mean_predictions):
+def compute_metrics(true_values, mean_predictions, lower_ci, upper_ci):
+    abs_error_solar = np.abs(true_values[:, 0] - mean_predictions[:, 0])
+    abs_error_wind = np.abs(true_values[:, 1] - mean_predictions[:, 1])
+    interval_width_solar = upper_ci[:, 0] - lower_ci[:, 0]
+    interval_width_wind = upper_ci[:, 1] - lower_ci[:, 1]
+
     return {
         "solar_r2": r2_score(true_values[:, 0], mean_predictions[:, 0]),
         "solar_mae": mean_absolute_error(true_values[:, 0], mean_predictions[:, 0]),
@@ -139,6 +144,8 @@ def compute_metrics(true_values, mean_predictions):
         "wind_r2": r2_score(true_values[:, 1], mean_predictions[:, 1]),
         "wind_mae": mean_absolute_error(true_values[:, 1], mean_predictions[:, 1]),
         "wind_rmse": np.sqrt(mean_squared_error(true_values[:, 1], mean_predictions[:, 1])),
+        "spearman_corr_uncertainty_error_solar": pd.Series(interval_width_solar).corr(pd.Series(abs_error_solar), method="spearman"),
+        "spearman_corr_uncertainty_error_wind": pd.Series(interval_width_wind).corr(pd.Series(abs_error_wind), method="spearman"),
     }
 
 
@@ -259,7 +266,7 @@ for kl_weight in KL_WEIGHTS:
         n_display=43800 // 2,
     )
 
-    metrics = compute_metrics(true_values, mean_predictions)
+    metrics = compute_metrics(true_values, mean_predictions, lower_ci, upper_ci)
     metrics.update({
         "kl_weight": kl_weight,
         "train_time_sec": train_time,

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import pandas as pd
 
 
@@ -44,41 +45,81 @@ def load_metrics(results_root: Path) -> pd.DataFrame:
             "Run evaluate_KL_weight_sensitivity.py first."
         )
 
-    df = pd.DataFrame(records)
-    df = df.sort_values("kl_weight").reset_index(drop=True)
-    return df
+    return pd.DataFrame(records).sort_values("kl_weight").reset_index(drop=True)
 
 
-def save_metric_plot(df: pd.DataFrame, metric: str, output_dir: Path):
-    plt.figure(figsize=(8, 5))
-    plt.plot(df["kl_weight"], df[metric], marker="o")
-    plt.xscale("log")
-    plt.xlabel("KL Weight (log scale)")
-    plt.ylabel(metric.replace("_", " ").title())
-    plt.title(f"{metric.replace('_', ' ').title()} vs KL Weight")
-    plt.grid(True, which="both", linestyle="--", alpha=0.4)
-    plt.tight_layout()
-    plt.savefig(output_dir / f"{metric}_vs_kl_weight.png")
-    plt.close()
+def _plot_metric(ax, df: pd.DataFrame, x_col: str, y_col: str, title: str, ylabel: str):
+    if y_col in df.columns:
+        ax.plot(df[x_col], df[y_col], marker="o")
+    else:
+        ax.text(0.5, 0.5, f"Missing metric: {y_col}", ha="center", va="center", transform=ax.transAxes)
+
+    ax.set_xscale("log")
+    ax.set_title(title)
+    ax.set_xlabel("KL Weight (log scale)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, which="both", linestyle="--", alpha=0.4)
 
 
-def save_group_plot(df: pd.DataFrame, metrics: list[str], output_dir: Path, filename: str, title: str):
-    n_metrics = len(metrics)
-    fig, axes = plt.subplots(n_metrics, 1, figsize=(9, 4 * n_metrics), sharex=True)
-    if n_metrics == 1:
-        axes = [axes]
+def save_summary_pdf(df: pd.DataFrame, output_pdf: Path):
+    pages = [
+        {
+            "output": "Solar",
+            "coverage": "coverage_solar",
+            "r2": "solar_r2",
+            "mae": "solar_mae",
+            "rmse": "solar_rmse",
+        },
+        {
+            "output": "Wind",
+            "coverage": "coverage_wind",
+            "r2": "wind_r2",
+            "mae": "wind_mae",
+            "rmse": "wind_rmse",
+        },
+    ]
 
-    for axis, metric in zip(axes, metrics):
-        axis.plot(df["kl_weight"], df[metric], marker="o")
-        axis.set_xscale("log")
-        axis.set_ylabel(metric.replace("_", " ").title())
-        axis.grid(True, which="both", linestyle="--", alpha=0.4)
+    with PdfPages(output_pdf) as pdf:
+        for page in pages:
+            fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
 
-    axes[-1].set_xlabel("KL Weight (log scale)")
-    fig.suptitle(title)
-    fig.tight_layout()
-    fig.savefig(output_dir / filename)
-    plt.close(fig)
+            _plot_metric(
+                axes[0, 0],
+                df,
+                "kl_weight",
+                page["coverage"],
+                f"{page['output']} Coverage vs KL Weight",
+                "Coverage",
+            )
+            _plot_metric(
+                axes[0, 1],
+                df,
+                "kl_weight",
+                page["r2"],
+                f"{page['output']} R² vs KL Weight",
+                "R²",
+            )
+            _plot_metric(
+                axes[1, 0],
+                df,
+                "kl_weight",
+                page["mae"],
+                f"{page['output']} MAE vs KL Weight",
+                "MAE",
+            )
+            _plot_metric(
+                axes[1, 1],
+                df,
+                "kl_weight",
+                page["rmse"],
+                f"{page['output']} RMSE vs KL Weight",
+                "RMSE",
+            )
+
+            fig.suptitle(f"KL Weight Sensitivity Metrics — {page['output']}", fontsize=14)
+            fig.tight_layout(rect=[0, 0, 1, 0.96])
+            pdf.savefig(fig)
+            plt.close(fig)
 
 
 def main():
@@ -87,62 +128,13 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     metrics_df = load_metrics(results_root)
-
     metrics_df.to_csv(output_dir / "all_metrics_comparison.csv", index=False)
 
-    metric_columns = [
-        "solar_r2",
-        "solar_mae",
-        "solar_rmse",
-        "wind_r2",
-        "wind_mae",
-        "wind_rmse",
-        "train_time_sec",
-        "infer_time_sec",
-        "coverage_solar",
-        "coverage_wind",
-    ]
+    output_pdf = output_dir / "kl_weight_metrics_summary.pdf"
+    save_summary_pdf(metrics_df, output_pdf)
 
-    available_metric_columns = [column for column in metric_columns if column in metrics_df.columns]
-
-    for metric in available_metric_columns:
-        save_metric_plot(metrics_df, metric, output_dir)
-
-    performance_metrics = [
-        metric
-        for metric in ["solar_r2", "wind_r2", "solar_mae", "wind_mae", "solar_rmse", "wind_rmse"]
-        if metric in metrics_df.columns
-    ]
-    if performance_metrics:
-        save_group_plot(
-            metrics_df,
-            performance_metrics,
-            output_dir,
-            filename="performance_metrics_vs_kl_weight.png",
-            title="Performance Metrics Across KL Weights",
-        )
-
-    coverage_metrics = [metric for metric in ["coverage_solar", "coverage_wind"] if metric in metrics_df.columns]
-    if coverage_metrics:
-        save_group_plot(
-            metrics_df,
-            coverage_metrics,
-            output_dir,
-            filename="coverage_metrics_vs_kl_weight.png",
-            title="Coverage Metrics Across KL Weights",
-        )
-
-    timing_metrics = [metric for metric in ["train_time_sec", "infer_time_sec"] if metric in metrics_df.columns]
-    if timing_metrics:
-        save_group_plot(
-            metrics_df,
-            timing_metrics,
-            output_dir,
-            filename="timing_metrics_vs_kl_weight.png",
-            title="Timing Metrics Across KL Weights",
-        )
-
-    print(f"Saved comparison artifacts to: {output_dir}")
+    print(f"Saved comparison table to: {output_dir / 'all_metrics_comparison.csv'}")
+    print(f"Saved summary plots PDF to: {output_pdf}")
 
 
 if __name__ == "__main__":
