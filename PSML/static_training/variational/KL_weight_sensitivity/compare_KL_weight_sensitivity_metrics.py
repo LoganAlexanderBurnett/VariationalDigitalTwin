@@ -8,6 +8,20 @@ import pandas as pd
 EXPECTED_WEIGHTS = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]
 
 
+def _compute_uncertainty_error_spearman(vgru_test_csv: Path) -> tuple[float, float]:
+    df = pd.read_csv(vgru_test_csv)
+
+    solar_abs_error = (df["True Solar"] - df["Predicted Mean Solar"]).abs()
+    wind_abs_error = (df["True Wind"] - df["Predicted Mean Wind"]).abs()
+
+    solar_interval_width = df["Upper CI Solar"] - df["Lower CI Solar"]
+    wind_interval_width = df["Upper CI Wind"] - df["Lower CI Wind"]
+
+    solar_spearman = solar_interval_width.corr(solar_abs_error, method="spearman")
+    wind_spearman = wind_interval_width.corr(wind_abs_error, method="spearman")
+    return solar_spearman, wind_spearman
+
+
 def load_metrics(results_root: Path) -> pd.DataFrame:
     records = []
     missing_cases = []
@@ -15,6 +29,7 @@ def load_metrics(results_root: Path) -> pd.DataFrame:
     for kl_weight in EXPECTED_WEIGHTS:
         case_dir = results_root / f"KL_{kl_weight:.0e}"
         metrics_path = case_dir / "metrics.csv"
+        vgru_test_path = case_dir / "vGRUTest.csv"
 
         if not metrics_path.exists():
             missing_cases.append(str(metrics_path))
@@ -26,6 +41,14 @@ def load_metrics(results_root: Path) -> pd.DataFrame:
             continue
 
         metric_row = case_metrics.iloc[0].to_dict()
+
+        if vgru_test_path.exists():
+            solar_spearman, wind_spearman = _compute_uncertainty_error_spearman(vgru_test_path)
+            metric_row["spearman_corr_uncertainty_error_solar"] = solar_spearman
+            metric_row["spearman_corr_uncertainty_error_wind"] = wind_spearman
+        else:
+            metric_row["spearman_corr_uncertainty_error_solar"] = float("nan")
+            metric_row["spearman_corr_uncertainty_error_wind"] = float("nan")
         metric_row["case_dir"] = case_dir.name
         metric_row["metrics_path"] = str(metrics_path)
 
