@@ -20,7 +20,7 @@ from psml.trainer import set_random_seed
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-DATA_PATH = '../../dataset/PSML.csv'
+DATA_PATH = '../../../dataset/PSML.csv'
 OUTPUT_ROOT = Path(__file__).resolve().parent
 KL_WEIGHTS = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]
 

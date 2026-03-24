@@ -103,9 +103,9 @@ def main():
 
     prepared = prepare_csv_autoregressive_splits(
         DATA_DIR,
-        train_name="../../../dataset/static_dataset/TF_TS_train.csv",
-        test_name="../../../dataset/static_dataset/TF_TS_test.csv",
-        valid_name="../../../dataset/static_dataset/TF_TS_valid.csv",
+        train_name="../../../../dataset/static_dataset/TF_TS_train.csv",
+        test_name="../../../../dataset/static_dataset/TF_TS_test.csv",
+        valid_name="../../../../dataset/static_dataset/TF_TS_valid.csv",
         lookback=10,
         device=device,
         interpolate_columns=["TS"],
