@@ -35,6 +35,7 @@ DEFAULTS = StaticExperimentDefaults(
     npz_dir="../../../dataset/",
 )
 N_JOBS_CANDIDATES = [1, 3, 6, 12]
+MAX_TEST_RUNS = 25
 
 
 def _resolve_npz_dir(npz_dir: str) -> str:
@@ -105,11 +106,12 @@ def main():
     dataset = BatteryRunDataset.from_directory(namespace.npz_dir)
     split = dataset.static_split(train_count=namespace.train_runs)
     train_x, train_y, train_dates = split.load_train_arrays(length=namespace.seq_len)
-    test_runs = list(split.iter_test_runs())
+    all_test_runs = list(split.iter_test_runs())
+    test_runs = all_test_runs[:MAX_TEST_RUNS]
 
     print("Train shape:", train_x.shape, train_y.shape)
     print("Train dates:", train_dates)
-    print(f"Number of test runs: {len(test_runs)}")
+    print(f"Number of test runs selected for benchmarking: {len(test_runs)} / {len(all_test_runs)}")
 
     train_start = time.perf_counter()
     train_static_model(namespace, train_x, train_y, model_cls=BattNN)
