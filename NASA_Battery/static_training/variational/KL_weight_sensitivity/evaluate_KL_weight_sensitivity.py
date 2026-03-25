@@ -26,8 +26,16 @@ DEFAULTS = StaticExperimentDefaults(
     train_runs=300,
     seq_len=30,
     epoch=500,
+    npz_dir="../../../dataset/",
 )
 KL_WEIGHTS = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]
+
+
+def _resolve_npz_dir(npz_dir: str) -> str:
+    npz_path = Path(npz_dir)
+    if npz_path.is_absolute():
+        return str(npz_path)
+    return str((Path(__file__).resolve().parent / npz_path).resolve())
 
 
 def _build_case_namespace(base_namespace, case_dir: Path, kl_weight: float):
@@ -39,6 +47,8 @@ def _build_case_namespace(base_namespace, case_dir: Path, kl_weight: float):
 
 def main():
     args = parse_args(DEFAULTS)
+    args.npz_dir = _resolve_npz_dir(args.npz_dir)
+
     config = build_static_experiment_config(args)
     base_namespace = config.to_namespace()
 
