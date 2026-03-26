@@ -8,6 +8,55 @@ import pandas as pd
 EXPECTED_WEIGHTS = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]
 
 
+def _first_present_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for name in candidates:
+        if name in df.columns:
+            return name
+    return None
+
+
+def _compute_uncertainty_metrics(predictions_csv: Path) -> dict:
+    df = pd.read_csv(predictions_csv)
+
+    true_col = _first_present_column(df, ["True Voltage", "true", "y_true", "target", "voltage_true"])
+    pred_col = _first_present_column(df, ["Predicted Mean Voltage", "pred_mean", "mean", "y_pred", "voltage_pred"])
+    lower_col = _first_present_column(df, ["Lower CI Voltage", "lower", "lower_ci", "ci_lower"])
+    upper_col = _first_present_column(df, ["Upper CI Voltage", "upper", "upper_ci", "ci_upper"])
+
+    if not all([true_col, pred_col, lower_col, upper_col]):
+        return {
+            "coverage": float("nan"),
+            "spearman_corr_uncertainty_error": float("nan"),
+        }
+
+    abs_error = (df[true_col] - df[pred_col]).abs()
+    interval_width = df[upper_col] - df[lower_col]
+    coverage = ((df[true_col] >= df[lower_col]) & (df[true_col] <= df[upper_col])).mean()
+    spearman_corr = interval_width.corr(abs_error, method="spearman")
+
+    return {
+        "coverage": float(coverage),
+        "spearman_corr_uncertainty_error": float(spearman_corr),
+    }
+
+
+def _find_predictions_csv(case_dir: Path) -> Path | None:
+    preferred = [
+        case_dir / "inference_predictions.csv",
+        case_dir / "vBattTest.csv",
+        case_dir / "predictions.csv",
+    ]
+    for candidate in preferred:
+        if candidate.exists():
+            return candidate
+
+    for candidate in sorted(case_dir.glob("*.csv")):
+        if candidate.name != "metrics.csv":
+            return candidate
+
+    return None
+
+
 def load_metrics(results_root: Path) -> pd.DataFrame:
     records = []
     missing_cases = []
@@ -26,6 +75,14 @@ def load_metrics(results_root: Path) -> pd.DataFrame:
             continue
 
         metric_row = case_metrics.iloc[0].to_dict()
+
+        predictions_csv = _find_predictions_csv(case_dir)
+        if predictions_csv is not None:
+            metric_row.update(_compute_uncertainty_metrics(predictions_csv))
+        else:
+            metric_row.setdefault("coverage", float("nan"))
+            metric_row.setdefault("spearman_corr_uncertainty_error", float("nan"))
+
         metric_row["case_dir"] = case_dir.name
         metric_row["metrics_path"] = str(metrics_path)
         if "kl_weight" not in metric_row:
@@ -65,9 +122,15 @@ def save_summary_pdf(df: pd.DataFrame, output_pdf: Path):
         fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
 
         _plot_metric(axes[0, 0], df, "mae", "MAE vs KL Weight", "MAE")
-        _plot_metric(axes[0, 1], df, "mape", "MAPE vs KL Weight", "MAPE")
-        _plot_metric(axes[1, 0], df, "mse", "MSE vs KL Weight", "MSE")
-        _plot_metric(axes[1, 1], df, "rmse", "RMSE vs KL Weight", "RMSE")
+        _plot_metric(axes[0, 1], df, "mse", "MSE vs KL Weight", "MSE")
+        _plot_metric(axes[1, 0], df, "coverage", "Uncertainty Coverage vs KL Weight", "Coverage")
+        _plot_metric(
+            axes[1, 1],
+            df,
+            "spearman_corr_uncertainty_error",
+            "Uncertainty-Error Spearman Corr vs KL Weight",
+            "Spearman Correlation",
+        )
 
         fig.suptitle("NASA Battery Variational BattNN KL Weight Sensitivity", fontsize=14)
         fig.tight_layout(rect=[0, 0, 1, 0.96])
