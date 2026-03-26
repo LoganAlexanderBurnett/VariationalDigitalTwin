@@ -19,7 +19,9 @@ from battery import (
     StaticExperimentDefaults,
     build_static_experiment_config,
     evaluate_static_model,
+    load_battery_checkpoint,
     parse_args,
+    predict_with_uncertainty,
     train_static_model,
 )
 from battery.models import VariationalBatteryModel as BattNN
@@ -51,6 +53,52 @@ def _build_case_namespace(base_namespace, case_dir: Path, kl_weight: float):
     return namespace
 
 
+def _build_checkpoint_path(args) -> Path:
+    return Path(args.results_dir) / (
+        f"{args.results_prefix}-{args.save_model}-batch_size={args.train_runs}-seq_len={args.seq_len}.pkl"
+    )
+
+
+def _save_per_point_inference_csv(args, split, model_cls, output_csv: Path):
+    model = model_cls(args)
+    load_battery_checkpoint(model, _build_checkpoint_path(args), map_location=args.device)
+    model.set_batch_size(1)
+
+    records = []
+    for run_idx, run in enumerate(split.iter_test_runs(), start=1):
+        current_tensor = torch.from_numpy(run.current.astype(np.float32)).view(1, -1).to(args.device)
+        prediction = predict_with_uncertainty(
+            model,
+            current_tensor,
+            mc_samples=args.mc_samples,
+            n_jobs=args.n_jobs,
+        )
+
+        mean_pred = prediction["mean"]
+        lower = prediction["lower"]
+        upper = prediction["upper"]
+        true_voltage = run.voltage
+
+        for time_idx, (y_true, y_pred_mean, y_lower, y_upper) in enumerate(
+            zip(true_voltage, mean_pred, lower, upper), start=1
+        ):
+            records.append(
+                {
+                    "run_index": run_idx,
+                    "date": run.date,
+                    "time_index": time_idx,
+                    "true": float(y_true),
+                    "pred_mean": float(y_pred_mean),
+                    "lower_ci": float(y_lower),
+                    "upper_ci": float(y_upper),
+                }
+            )
+
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(records).to_csv(output_csv, index=False)
+    print(f"Saved per-point inference data to {output_csv}")
+
+
 def _run_static_experiment_with_timing(args, model_cls):
     random.seed(2022)
     np.random.seed(2022)
@@ -75,6 +123,13 @@ def _run_static_experiment_with_timing(args, model_cls):
         model_cls=model_cls,
     )
     infer_time = time.time() - infer_start
+
+    _save_per_point_inference_csv(
+        args,
+        split,
+        model_cls=model_cls,
+        output_csv=Path(args.results_dir) / "inference_predictions.csv",
+    )
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
