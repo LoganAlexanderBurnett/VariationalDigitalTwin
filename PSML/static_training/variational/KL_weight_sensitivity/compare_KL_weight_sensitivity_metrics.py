@@ -133,28 +133,28 @@ def save_summary_pdf(df: pd.DataFrame, output_pdf: Path):
             axes[0, 1],
             df,
             "kl_weight",
+            "spearman_corr_uncertainty_error_solar",
+            "spearman_corr_uncertainty_error_wind",
+            "Spearman(width,error) vs KL Weight",
+            "Spearman ρ",
+        )
+        _plot_dual_output_metric(
+            axes[1, 0],
+            df,
+            "kl_weight",
             "solar_r2",
             "wind_r2",
             "R² vs KL Weight",
             "R²",
         )
         _plot_dual_output_metric(
-            axes[1, 0],
+            axes[1, 1],
             df,
             "kl_weight",
             "solar_mae",
             "wind_mae",
             "MAE vs KL Weight",
             "MAE",
-        )
-        _plot_dual_output_metric(
-            axes[1, 1],
-            df,
-            "kl_weight",
-            "solar_rmse",
-            "wind_rmse",
-            "RMSE vs KL Weight",
-            "RMSE",
         )
 
         fig.suptitle("KL Weight Sensitivity Metrics (Solar and Wind)", fontsize=14)
