@@ -100,43 +100,80 @@ def _plot_metric(ax, df: pd.DataFrame, y_col: str, title: str, ylabel: str):
     ax.grid(True, which="both", linestyle="--", alpha=0.4)
 
 
+def _plot_dual_output_metric(
+    ax,
+    df: pd.DataFrame,
+    output_1_col: str,
+    output_2_col: str,
+    title: str,
+    ylabel: str,
+    output_1_label: str = "Output 1 (TS)",
+    output_2_label: str = "Output 2 (TF)",
+):
+    plotted = False
+
+    if output_1_col in df.columns:
+        ax.plot(df["kl_weight"], df[output_1_col], marker="o", label=output_1_label)
+        plotted = True
+    else:
+        ax.text(0.5, 0.6, f"Missing metric: {output_1_col}", ha="center", va="center", transform=ax.transAxes)
+
+    if output_2_col in df.columns:
+        ax.plot(df["kl_weight"], df[output_2_col], marker="s", label=output_2_label)
+        plotted = True
+    else:
+        ax.text(0.5, 0.4, f"Missing metric: {output_2_col}", ha="center", va="center", transform=ax.transAxes)
+
+    ax.set_xscale("log")
+    ax.set_title(title)
+    ax.set_xlabel("KL Weight (log scale)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, which="both", linestyle="--", alpha=0.4)
+    if plotted:
+        ax.legend(fontsize=8)
+
+
 def save_summary_pdf(df: pd.DataFrame, output_pdf: Path):
-    pages = [
-        {
-            "output": "Output 1 (TS)",
-            "coverage": "coverage_output_1",
-            "spearman": "spearman_corr_uncertainty_error_output_1",
-            "r2": "output_1_r2",
-            "mae": "output_1_mae",
-        },
-        {
-            "output": "Output 2 (TF)",
-            "coverage": "coverage_output_2",
-            "spearman": "spearman_corr_uncertainty_error_output_2",
-            "r2": "output_2_r2",
-            "mae": "output_2_mae",
-        },
-    ]
-
     with PdfPages(output_pdf) as pdf:
-        for page in pages:
-            fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
+        fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
 
-            _plot_metric(axes[0, 0], df, page["coverage"], f"{page['output']} Coverage vs KL Weight", "Coverage")
-            _plot_metric(
-                axes[0, 1],
-                df,
-                page["spearman"],
-                f"{page['output']} Spearman(width,error) vs KL Weight",
-                "Spearman ρ",
-            )
-            _plot_metric(axes[1, 0], df, page["r2"], f"{page['output']} R² vs KL Weight", "R²")
-            _plot_metric(axes[1, 1], df, page["mae"], f"{page['output']} MAE vs KL Weight", "MAE")
+        _plot_dual_output_metric(
+            axes[0, 0],
+            df,
+            "coverage_output_1",
+            "coverage_output_2",
+            "Coverage vs KL Weight",
+            "Coverage",
+        )
+        _plot_dual_output_metric(
+            axes[0, 1],
+            df,
+            "spearman_corr_uncertainty_error_output_1",
+            "spearman_corr_uncertainty_error_output_2",
+            "Spearman(width,error) vs KL Weight",
+            "Spearman ρ",
+        )
+        _plot_dual_output_metric(
+            axes[1, 0],
+            df,
+            "output_1_r2",
+            "output_2_r2",
+            "R² vs KL Weight",
+            "R²",
+        )
+        _plot_dual_output_metric(
+            axes[1, 1],
+            df,
+            "output_1_mae",
+            "output_2_mae",
+            "MAE vs KL Weight",
+            "MAE",
+        )
 
-            fig.suptitle(f"HTTF Variational GRU KL Weight Sensitivity — {page['output']}", fontsize=14)
-            fig.tight_layout(rect=[0, 0, 1, 0.96])
-            pdf.savefig(fig)
-            plt.close(fig)
+        fig.suptitle("HTTF Variational GRU KL Weight Sensitivity (Both Outputs)", fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        pdf.savefig(fig)
+        plt.close(fig)
 
 
 def main():

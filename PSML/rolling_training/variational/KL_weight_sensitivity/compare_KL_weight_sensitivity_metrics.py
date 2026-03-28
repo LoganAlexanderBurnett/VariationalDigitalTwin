@@ -142,6 +142,37 @@ def _plot_metric_vs_kl(ax, df: pd.DataFrame, y_col: str, title: str, ylabel: str
     ax.grid(True, which="both", linestyle="--", alpha=0.4)
 
 
+def _plot_dual_output_metric_vs_kl(
+    ax,
+    df: pd.DataFrame,
+    solar_col: str,
+    wind_col: str,
+    title: str,
+    ylabel: str,
+):
+    plotted = False
+
+    if solar_col in df.columns:
+        ax.plot(df["kl_weight"], df[solar_col], marker="o", label="Solar")
+        plotted = True
+    else:
+        ax.text(0.5, 0.6, f"Missing metric: {solar_col}", ha="center", va="center", transform=ax.transAxes)
+
+    if wind_col in df.columns:
+        ax.plot(df["kl_weight"], df[wind_col], marker="s", label="Wind")
+        plotted = True
+    else:
+        ax.text(0.5, 0.4, f"Missing metric: {wind_col}", ha="center", va="center", transform=ax.transAxes)
+
+    ax.set_xscale("log")
+    ax.set_title(title)
+    ax.set_xlabel("KL Weight (log scale)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, which="both", linestyle="--", alpha=0.4)
+    if plotted:
+        ax.legend(fontsize=8)
+
+
 def _plot_metric_vs_session(ax, session_df: pd.DataFrame, y_col: str, title: str, ylabel: str):
     if y_col not in session_df.columns:
         ax.text(0.5, 0.5, f"Missing metric: {y_col}", ha="center", va="center", transform=ax.transAxes)
@@ -220,36 +251,46 @@ def save_session_behavior_pdf(session_df: pd.DataFrame, output_pdf: Path):
 
 
 def save_kl_summary_pdf(case_df: pd.DataFrame, output_pdf: Path):
-    pages = [
-        {
-            "output": "Solar",
-            "coverage": "coverage_solar",
-            "r2": "solar_r2",
-            "mae": "solar_mae",
-            "rmse": "solar_rmse",
-        },
-        {
-            "output": "Wind",
-            "coverage": "coverage_wind",
-            "r2": "wind_r2",
-            "mae": "wind_mae",
-            "rmse": "wind_rmse",
-        },
-    ]
-
     with PdfPages(output_pdf) as pdf:
-        for page in pages:
-            fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
+        fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
 
-            _plot_metric_vs_kl(axes[0, 0], case_df, page["coverage"], f"{page['output']} Coverage vs KL Weight", "Coverage")
-            _plot_metric_vs_kl(axes[0, 1], case_df, page["r2"], f"{page['output']} R² vs KL Weight", "R²")
-            _plot_metric_vs_kl(axes[1, 0], case_df, page["mae"], f"{page['output']} MAE vs KL Weight", "MAE")
-            _plot_metric_vs_kl(axes[1, 1], case_df, page["rmse"], f"{page['output']} RMSE vs KL Weight", "RMSE")
+        _plot_dual_output_metric_vs_kl(
+            axes[0, 0],
+            case_df,
+            "coverage_solar",
+            "coverage_wind",
+            "Coverage vs KL Weight",
+            "Coverage",
+        )
+        _plot_dual_output_metric_vs_kl(
+            axes[0, 1],
+            case_df,
+            "solar_r2",
+            "wind_r2",
+            "R² vs KL Weight",
+            "R²",
+        )
+        _plot_dual_output_metric_vs_kl(
+            axes[1, 0],
+            case_df,
+            "solar_mae",
+            "wind_mae",
+            "MAE vs KL Weight",
+            "MAE",
+        )
+        _plot_dual_output_metric_vs_kl(
+            axes[1, 1],
+            case_df,
+            "solar_rmse",
+            "wind_rmse",
+            "RMSE vs KL Weight",
+            "RMSE",
+        )
 
-            fig.suptitle(f"Rolling KL Weight Sensitivity Metrics — {page['output']}", fontsize=14)
-            fig.tight_layout(rect=[0, 0, 1, 0.96])
-            pdf.savefig(fig)
-            plt.close(fig)
+        fig.suptitle("Rolling KL Weight Sensitivity Metrics (Solar and Wind)", fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        pdf.savefig(fig)
+        plt.close(fig)
 
 
 def main():
