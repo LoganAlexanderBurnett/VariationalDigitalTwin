@@ -1,0 +1,132 @@
+Reviewer Comment Follow-up Summary (Additional Work in KL Weight Sensitivity Scripts)
+
+Purpose
+- This document summarizes the additional analyses and script-level updates completed in response to reviewer feedback.
+- It is organized by reviewer concern and by script family.
+- Placeholder sections are intentionally left for inserting and discussing numerical results.
+
+Scripts Covered
+1) PSML/static_training/variational/KL_weight_sensitivity/
+   - evaluate_KL_weight_sensitivity.py
+   - compare_KL_weight_sensitivity_metrics.py
+2) PSML/rolling_training/variational/KL_weight_sensitivity/
+   - evaluate_KL_weight_sensitivity.py
+   - compare_KL_weight_sensitivity_metrics.py
+3) HTTF/static_training/variational/GRU/KL_weight_sensitivity/
+   - evaluate_KL_weight_sensitivity.py
+   - compare_KL_weight_sensitivity_metrics.py
+4) NASA_Battery/static_training/variational/KL_weight_sensitivity_seqlen30/
+   - evaluate_KL_weight_sensitivity.py
+   - compare_KL_weight_sensitivity_metrics.py
+5) NASA_Battery/rolling_training/variational/KL_weight_sensitivity/
+   - evaluate_KL_weight_sensitivity.py
+   - compare_KL_weight_sensitivity_metrics.py
+
+-------------------------------------------------------------------------------
+A) Reviewer Point 1: KL balancing parameter sensitivity and uncertainty-method justification
+-------------------------------------------------------------------------------
+
+Additional work completed
+- Added/standardized KL-weight sensitivity sweeps across predefined KL weights (e.g., 1e-6 to 1e-2) in the listed evaluation scripts.
+- Ensured each KL setting writes case-level outputs to dedicated KL-specific directories (KL_1e-06, KL_1e-05, etc.) for reproducible comparison.
+- Extended comparison scripts to aggregate metrics across KL settings and generate cross-KL summary artifacts.
+- Added plotting/summary logic to visualize how predictive performance and uncertainty diagnostics vary with KL weight.
+
+Interpretation-ready notes
+- These updates enable a direct empirical discussion of how the ELBO tradeoff parameter impacts both point accuracy and uncertainty behavior.
+- This provides stronger support for selecting KL weights with an explicit sensitivity analysis rather than a single empirical choice.
+
+[RESULTS TO ADD: KL sensitivity trends]
+- Best-performing KL weight(s):
+- Stability of ranking across datasets (PSML / HTTF / NASA):
+- Any observed tradeoff between error metrics and uncertainty metrics:
+
+-------------------------------------------------------------------------------
+B) Reviewer Point 2: Calibration and reliability of uncertainty intervals
+-------------------------------------------------------------------------------
+
+Additional work completed
+- Added/propagated uncertainty reliability metrics in evaluation and/or comparison scripts, including:
+  - empirical coverage of prediction intervals,
+  - interval-width vs absolute-error association (Spearman correlation) as a usefulness diagnostic.
+- Updated case-level and session-level summaries (where rolling) to include these uncertainty metrics.
+- Updated comparison scripts to include uncertainty-centric plots/tables alongside standard predictive metrics.
+
+Dataset-specific notes
+- PSML (static/rolling): coverage for Solar/Wind outputs and uncertainty-error rank correlation were added to KL summaries.
+- HTTF (static): per-output (Output 1 / Output 2) coverage and uncertainty-error rank correlation were added.
+- NASA Battery (static/rolling): coverage and uncertainty-error rank correlation were added for voltage predictions.
+
+Interpretation-ready notes
+- These additions create explicit calibration/reliability evidence (coverage) and informativeness evidence (whether wider intervals align with larger errors).
+- They support a more rigorous uncertainty-validation narrative for active learning and decision support claims.
+
+[RESULTS TO ADD: uncertainty reliability]
+- Empirical coverage at selected confidence level(s):
+- Coverage consistency across KL settings:
+- Spearman(width, error) trend and interpretation:
+- Cases where uncertainty quality degraded or improved:
+
+-------------------------------------------------------------------------------
+C) Reviewer Point 3: Practical deployment aspects (rolling stability, computational cost)
+-------------------------------------------------------------------------------
+
+Additional work completed
+- Added/standardized runtime instrumentation in evaluation scripts:
+  - training time,
+  - inference time,
+  - average per-session times for rolling runs,
+  - number of executed sessions (rolling workflows).
+- Preserved per-session tracking in rolling settings to analyze behavior under repeated updates.
+- Included timing/operational fields in metrics exports to support practical deployment discussion.
+
+Dataset-specific notes
+- PSML rolling and NASA Battery rolling scripts now capture session-wise runtime and uncertainty/performance metrics.
+- Static scripts include train/inference timing per KL case to support baseline deployment estimates.
+
+Interpretation-ready notes
+- These updates provide direct evidence for computational overhead and update stability over repeated retraining cycles.
+- The resulting logs/CSV outputs can be used to report latency and scalability implications for real-time digital twin operation.
+
+[RESULTS TO ADD: practical deployment]
+- Total and average training/inference times:
+- Session-to-session drift/stability observations:
+- Runtime vs uncertainty-quality tradeoffs:
+- Hardware context for reported times:
+
+-------------------------------------------------------------------------------
+D) Output artifacts now available for manuscript revision
+-------------------------------------------------------------------------------
+
+Expected artifacts generated by the updated scripts (depending on dataset/workflow)
+- Per-KL metrics CSV files.
+- Per-point prediction files with predictive mean and interval bounds.
+- Aggregated KL-comparison CSV summaries.
+- Multi-panel KL sensitivity PDFs for predictive and uncertainty metrics.
+- Session-wise summaries/plots for rolling training pipelines.
+
+[RESULTS TO ADD: artifact references]
+- Figure/Table IDs planned for manuscript:
+- File paths used for final reported numbers:
+
+-------------------------------------------------------------------------------
+E) Suggested text integration plan for rebuttal/manuscript
+-------------------------------------------------------------------------------
+
+1) Methods section
+- Add brief rationale for KL sensitivity protocol and why these ranges were selected.
+- Clarify that uncertainty diagnostics include both calibration (coverage) and utility (width-error association).
+
+2) Results section
+- Report KL sweep outcomes jointly on prediction and uncertainty metrics.
+- Include session-wise stability/runtime discussion for rolling updates.
+
+3) Discussion section
+- Highlight practical implications for deployment latency and update frequency.
+- Explicitly discuss observed tradeoffs and chosen operating point.
+
+[NOTES TO ADD: final narrative choices]
+- Final operating KL value and justification:
+- Key caveats/limitations:
+- Future work items:
+
