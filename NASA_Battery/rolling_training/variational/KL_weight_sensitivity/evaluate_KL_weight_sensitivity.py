@@ -53,8 +53,8 @@ def get_args():
     parser.add_argument("--save_model", default="NASA")
     parser.add_argument("--block-size", type=int, default=10)
     parser.add_argument("--save-dir", default="./models")
-    parser.add_argument("--mc_samples", type=int, default=250)
-    parser.add_argument("--n_jobs", type=int, default=1)
+    parser.add_argument("--mc_samples", type=int, default=100)
+    parser.add_argument("--n_jobs", type=int, default=10)
     args, _ = parser.parse_known_args()
     return args
 

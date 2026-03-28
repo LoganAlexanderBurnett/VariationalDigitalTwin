@@ -14,7 +14,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from battery import (  # noqa: E402
+from battery import (
     BatteryRunDataset,
     StaticExperimentDefaults,
     build_static_experiment_config,
@@ -23,7 +23,7 @@ from battery import (  # noqa: E402
     predict_with_uncertainty,
     train_static_model,
 )
-from battery.models import VariationalBatteryModel as BattNN  # noqa: E402
+from battery.models import VariationalBatteryModel as BattNN
 
 
 DEFAULTS = StaticExperimentDefaults(

@@ -1,0 +1,11 @@
+{
+  "session": 28,
+  "num_runs": 10,
+  "mae": 0.04992339387536049,
+  "mape": 0.014117849059402943,
+  "mse": 0.0039361813105642796,
+  "rmse": 0.0627389935412123,
+  "coverage": 0.163,
+  "spearman_corr_uncertainty_error": -0.04639017663166067,
+  "inference_time_seconds": 19.164011999964714
+}

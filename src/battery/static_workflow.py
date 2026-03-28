@@ -30,7 +30,7 @@ class StaticExperimentDefaults:
     npz_dir: str = "../../dataset/"
     plot_n: int = 3
     mc_samples: int = 100
-    n_jobs: int = 6
+    n_jobs: int = 12
     device: str = "cpu"
     epoch: Optional[int] = None
     lr: float = 2e-2
