@@ -3,7 +3,7 @@ Reviewer Comment Follow-up Summary (Additional Work in KL Weight Sensitivity Scr
 Purpose
 - This document summarizes the additional analyses and script-level updates completed in response to reviewer feedback.
 - It is organized by reviewer concern and by script family.
-- Placeholder sections are intentionally left for inserting and discussing numerical results.
+- Results and implications from the additional KL-sensitivity studies have now been incorporated below, with targeted space left for adding final figure/table references and any extra narrative polishing.
 
 Scripts Covered
 1) PSML/static_training/variational/KL_weight_sensitivity/
@@ -32,14 +32,26 @@ Additional work completed
 - Extended comparison scripts to aggregate metrics across KL settings and generate cross-KL summary artifacts.
 - Added plotting/summary logic to visualize how predictive performance and uncertainty diagnostics vary with KL weight.
 
-Interpretation-ready notes
-- These updates enable a direct empirical discussion of how the ELBO tradeoff parameter impacts both point accuracy and uncertainty behavior.
-- This provides stronger support for selecting KL weights with an explicit sensitivity analysis rather than a single empirical choice.
+Observed sensitivity trends and implications
+- PSML:
+  - Coverage increases with higher KL weight, but overly large KL weight (especially 1e-2) over-regularizes the learned posterior and effectively collapses it toward the prior.
+  - A clear tradeoff appears between high coverage and uncertainty informativeness: KL=1e-2 gives near-full coverage but the width-error correlation weakens substantially and can become negative in later rolling sessions.
+  - KL=1e-4 gives the best overall operating point in PSML: reasonably high coverage (~0.7 solar, ~0.85 wind), positive width-error correlation throughout rolling updates, and stable predictive performance (R²/MAE/RMSE) across sessions.
+  - Implication: for PSML, moderate KL regularization (1e-4) balances calibration, usable uncertainty ranking, and predictive accuracy better than aggressive regularization.
 
-[RESULTS TO ADD: KL sensitivity trends]
-- Best-performing KL weight(s):
-- Stability of ranking across datasets (PSML / HTTF / NASA):
-- Any observed tradeoff between error metrics and uncertainty metrics:
+- HTTF:
+  - Coverage also rises as KL weight increases, consistent with stronger pull toward the prior.
+  - KL=1e-4 provides better coverage (~0.7 for TS and ~0.1 for TF) but produces negative width-error correlation.
+  - KL=1e-5 gives lower coverage (~0.3 TS and ~0.4 TF) but preserves positive width-error correlation for both outputs.
+  - Implication: HTTF exposes a stronger calibration-vs-informativeness tradeoff than PSML; KL selection should prioritize intended use (coverage-oriented vs uncertainty-ranking-oriented).
+
+- NASA Battery:
+  - Predictive performance metrics are relatively insensitive to KL weight in both static and rolling settings.
+  - This indicates KL tuning has stronger influence on uncertainty behavior than on point-prediction skill in this dataset.
+
+Cross-dataset interpretation
+- Best-performing KL weight depends on objective: maximizing coverage alone favors larger KL, while preserving informative uncertainty (positive width-error correlation) favors moderate KL.
+- A single global KL weight is not optimal across all cases; dataset-specific operating points are justified.
 
 -------------------------------------------------------------------------------
 B) Reviewer Point 2: Calibration and reliability of uncertainty intervals
@@ -52,20 +64,26 @@ Additional work completed
 - Updated case-level and session-level summaries (where rolling) to include these uncertainty metrics.
 - Updated comparison scripts to include uncertainty-centric plots/tables alongside standard predictive metrics.
 
-Dataset-specific notes
-- PSML (static/rolling): coverage for Solar/Wind outputs and uncertainty-error rank correlation were added to KL summaries.
-- HTTF (static): per-output (Output 1 / Output 2) coverage and uncertainty-error rank correlation were added.
-- NASA Battery (static/rolling): coverage and uncertainty-error rank correlation were added for voltage predictions.
+Dataset-specific reliability outcomes
+- PSML (static/rolling):
+  - Coverage generally improves as KL increases.
+  - At very high KL (1e-2), high coverage can come at the cost of weak/negative width-error correlation, especially after multiple rolling updates.
+  - KL=1e-4 maintains positive correlation through rolling sessions while retaining good coverage, indicating more reliable uncertainty for operational use.
 
-Interpretation-ready notes
-- These additions create explicit calibration/reliability evidence (coverage) and informativeness evidence (whether wider intervals align with larger errors).
-- They support a more rigorous uncertainty-validation narrative for active learning and decision support claims.
+- HTTF (static):
+  - High test performance across all KL weights does not directly translate into consistently strong global calibration/correlation metrics.
+  - Given thermocouple-acquired noisy labels/signals, average coverage and width-error correlation are sensitive to noise even when uncertainty visibly widens at physically plausible points (peaks, valleys, sharp transitions).
+  - This suggests uncertainty quality should be interpreted with both global summary metrics and local qualitative behavior.
 
-[RESULTS TO ADD: uncertainty reliability]
-- Empirical coverage at selected confidence level(s):
-- Coverage consistency across KL settings:
-- Spearman(width, error) trend and interpretation:
-- Cases where uncertainty quality degraded or improved:
+- NASA Battery:
+  - Static training: coverage is poor across KL weights; width-error correlation remains positive but modest (~0.15–0.20).
+  - Rolling training: coverage is much better than static but tends to decrease with session index; width-error correlation oscillates around zero (slightly positive/negative by session).
+  - Implication: data sparsity strongly limits stability and calibration quality for VI uncertainty, especially in static training.
+
+Reliability implications for manuscript claims
+- The added diagnostics show uncertainty is not uniformly reliable across datasets and training modes.
+- Rolling updates can improve calibration in sparse-data settings (NASA) but do not fully eliminate session-wise variability.
+- Reporting both coverage and width-error correlation is necessary to avoid over-interpreting interval quality from coverage alone.
 
 -------------------------------------------------------------------------------
 C) Reviewer Point 3: Practical deployment aspects (rolling stability, computational cost)
@@ -80,19 +98,23 @@ Additional work completed
 - Preserved per-session tracking in rolling settings to analyze behavior under repeated updates.
 - Included timing/operational fields in metrics exports to support practical deployment discussion.
 
-Dataset-specific notes
-- PSML rolling and NASA Battery rolling scripts now capture session-wise runtime and uncertainty/performance metrics.
-- Static scripts include train/inference timing per KL case to support baseline deployment estimates.
+Observed stability/practicality outcomes and implications
+- PSML rolling:
+  - Performance metrics remain consistent through rolling sessions at KL=1e-4 while uncertainty metrics stay behaviorally meaningful (positive correlation).
+  - This supports the practicality of repeated updates when KL is chosen in a moderate regime.
 
-Interpretation-ready notes
-- These updates provide direct evidence for computational overhead and update stability over repeated retraining cycles.
-- The resulting logs/CSV outputs can be used to report latency and scalability implications for real-time digital twin operation.
+- NASA Battery rolling:
+  - Coverage improvement over static training demonstrates benefit from rolling adaptation.
+  - However, the decline in coverage over sessions plus correlation oscillating around zero indicates uncertainty reliability can drift under sparse-data repeated updates.
+  - Practical implication: rolling retraining helps but should be paired with session-wise monitoring and fallback thresholds in low-data regimes.
 
-[RESULTS TO ADD: practical deployment]
-- Total and average training/inference times:
-- Session-to-session drift/stability observations:
-- Runtime vs uncertainty-quality tradeoffs:
-- Hardware context for reported times:
+- Across datasets:
+  - Since point-performance sensitivity to KL is often mild (especially NASA), operational KL selection should prioritize uncertainty reliability/stability criteria rather than error metrics alone.
+
+[RESULTS SPACE: deployment timing numbers]
+- Total and average training/inference times to report:
+- Hardware/latency context to include in manuscript:
+- Any additional deployment constraints or memory profiling notes:
 
 -------------------------------------------------------------------------------
 D) Output artifacts now available for manuscript revision
@@ -105,9 +127,10 @@ Expected artifacts generated by the updated scripts (depending on dataset/workfl
 - Multi-panel KL sensitivity PDFs for predictive and uncertainty metrics.
 - Session-wise summaries/plots for rolling training pipelines.
 
-[RESULTS TO ADD: artifact references]
+[RESULTS SPACE: artifact references]
 - Figure/Table IDs planned for manuscript:
-- File paths used for final reported numbers:
+- Exact file paths used for final reported numbers:
+- Any appendix figures for session-wise uncertainty drift:
 
 -------------------------------------------------------------------------------
 E) Suggested text integration plan for rebuttal/manuscript
@@ -116,17 +139,21 @@ E) Suggested text integration plan for rebuttal/manuscript
 1) Methods section
 - Add brief rationale for KL sensitivity protocol and why these ranges were selected.
 - Clarify that uncertainty diagnostics include both calibration (coverage) and utility (width-error association).
+- State explicitly that KL selection is treated as a dataset-dependent operating-point choice.
 
 2) Results section
 - Report KL sweep outcomes jointly on prediction and uncertainty metrics.
-- Include session-wise stability/runtime discussion for rolling updates.
+- For PSML, highlight KL=1e-4 as the balanced choice.
+- For HTTF, highlight calibration-informativeness tension (1e-4 vs 1e-5 behavior).
+- For NASA, contrast static vs rolling uncertainty behavior and emphasize sparse-data limitations.
 
 3) Discussion section
 - Highlight practical implications for deployment latency and update frequency.
-- Explicitly discuss observed tradeoffs and chosen operating point.
+- Explicitly discuss observed tradeoffs and chosen operating point(s).
+- Note that high coverage alone is insufficient if uncertainty width loses correlation with actual error.
 
-[NOTES TO ADD: final narrative choices]
-- Final operating KL value and justification:
-- Key caveats/limitations:
-- Future work items:
+[NOTES SPACE: final narrative choices]
+- Final operating KL value per dataset and justification:
+- Key caveats/limitations language:
+- Future work items (e.g., robust calibration under sparse/noisy data):
 
