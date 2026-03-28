@@ -41,7 +41,10 @@ def _load_session_metrics_with_uncertainty(case_dir: Path, kl_weight: float) -> 
         else:
             rows.append({"coverage": float("nan"), "spearman_corr_uncertainty_error": float("nan")})
 
-    session_df = pd.concat([session_df.reset_index(drop=True), pd.DataFrame(rows)], axis=1)
+    session_df = session_df.reset_index(drop=True)
+    uncertainty_df = pd.DataFrame(rows)
+    for col in uncertainty_df.columns:
+        session_df[col] = uncertainty_df[col]
     session_df["kl_weight"] = kl_weight
     session_df["case_dir"] = case_dir.name
     return session_df

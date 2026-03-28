@@ -105,16 +105,16 @@ def save_summary_pdf(df: pd.DataFrame, output_pdf: Path):
         {
             "output": "Output 1 (TS)",
             "coverage": "coverage_output_1",
+            "spearman": "spearman_corr_uncertainty_error_output_1",
             "r2": "output_1_r2",
             "mae": "output_1_mae",
-            "rmse": "output_1_rmse",
         },
         {
             "output": "Output 2 (TF)",
             "coverage": "coverage_output_2",
+            "spearman": "spearman_corr_uncertainty_error_output_2",
             "r2": "output_2_r2",
             "mae": "output_2_mae",
-            "rmse": "output_2_rmse",
         },
     ]
 
@@ -123,9 +123,15 @@ def save_summary_pdf(df: pd.DataFrame, output_pdf: Path):
             fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
 
             _plot_metric(axes[0, 0], df, page["coverage"], f"{page['output']} Coverage vs KL Weight", "Coverage")
-            _plot_metric(axes[0, 1], df, page["r2"], f"{page['output']} R² vs KL Weight", "R²")
-            _plot_metric(axes[1, 0], df, page["mae"], f"{page['output']} MAE vs KL Weight", "MAE")
-            _plot_metric(axes[1, 1], df, page["rmse"], f"{page['output']} RMSE vs KL Weight", "RMSE")
+            _plot_metric(
+                axes[0, 1],
+                df,
+                page["spearman"],
+                f"{page['output']} Spearman(width,error) vs KL Weight",
+                "Spearman ρ",
+            )
+            _plot_metric(axes[1, 0], df, page["r2"], f"{page['output']} R² vs KL Weight", "R²")
+            _plot_metric(axes[1, 1], df, page["mae"], f"{page['output']} MAE vs KL Weight", "MAE")
 
             fig.suptitle(f"HTTF Variational GRU KL Weight Sensitivity — {page['output']}", fontsize=14)
             fig.tight_layout(rect=[0, 0, 1, 0.96])
