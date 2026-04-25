@@ -1,0 +1,25 @@
+name: variational-digital-twin
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - joblib
+  - pytorch
+  - torchvision
+  - torchaudio
+  - jupyter
+  - ipykernel
+  - notebook
+  - tqdm
+  - optuna
+  - pip:
+      - -e .
