@@ -6,6 +6,12 @@ This repository contains benchmark workflows for variational digital twin modeli
 - **HTTF**: thermal forecasting
 - **PSML**: renewable power forecasting
 
+## Paper
+
+Published article DOI: https://doi.org/10.1016/j.egyai.2026.100756
+
+![Variational Digital Twin loop](VDT-loop.png)
+
 ## Environment setup
 
 Create a reproducible conda environment from the provided specification file:
