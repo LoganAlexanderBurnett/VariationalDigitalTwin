@@ -1,51 +1,53 @@
 # Variational Digital Twin
 
-Reinforcement-learning-free benchmark repository for variational digital twin modeling across three case studies:
+This repository contains benchmark workflows for variational digital twin modeling across three application domains:
 
-- **NASA Battery aging prediction**
-- **HTTF thermal forecasting**
-- **PSML renewable power forecasting**
+- **NASA Battery**: battery aging and voltage prediction
+- **HTTF**: thermal forecasting
+- **PSML**: renewable power forecasting
 
-This repository now includes an automated workflow to generate a consolidated `paper_results/` folder containing the main paper figures and key result artifacts.
+## Environment setup
 
-## Environment installation
+Create a reproducible conda environment from the provided specification file:
 
 ```bash
-# 1) Create and activate the conda environment with all required dependencies
 conda env create -f environment.yml
 conda activate variational-digital-twin
+```
 
-# 2) (Optional) install papermill for notebook automation
+Optional notebook automation dependency:
+
+```bash
 pip install papermill
 ```
 
-## How to generate the paper results
+## Reproducing paper artifacts
 
-### Step 1: Run (or re-run) experiment/plot scripts
-You can run your normal training and plotting scripts in each module as needed (e.g., NASA battery static/rolling outputs, HTTF comparisons, PSML outputs).
+### 1) Run model training/evaluation scripts
+Run the experiment scripts relevant to your study (NASA_Battery, HTTF, and/or PSML) to produce model outputs and figures.
 
-### Step 2: Build the consolidated `paper_results/` directory
-From the repository root:
+### 2) Collect outputs into `paper_results/`
+From the repository root, run:
 
 ```bash
 python scripts/generate_paper_results.py --clean
 ```
 
-This command:
+The collection script performs the following steps:
 
-1. Runs the plot scripts that generate key comparison figures:
+1. Executes the configured plotting scripts:
    - `NASA_Battery/plot_static_vs_rolling.py`
    - `HTTF/static_training/plot_model_comparisons.py`
-2. Collects paper-relevant artifacts from `NASA_Battery/`, `HTTF/`, and `PSML/`.
-3. Writes all copied files to `paper_results/` while preserving source-relative paths.
-4. Generates `paper_results/MANIFEST.md` listing all included artifacts.
+2. Collects selected figures and result artifacts from `NASA_Battery/`, `HTTF/`, and `PSML/`.
+3. Copies collected files into `paper_results/` using source-relative paths.
+4. Writes `paper_results/MANIFEST.md` with an index of included artifacts.
 
-## Notes
+If figures are already generated and you only want to re-collect files:
 
-- If you already generated figures and only want to re-collect files, use:
+```bash
+python scripts/generate_paper_results.py --skip-plots --clean
+```
 
-  ```bash
-  python scripts/generate_paper_results.py --skip-plots --clean
-  ```
+## Reproducibility note
 
-- Some training procedures are stochastic. Re-running model training can produce slightly different metrics, but trends should remain consistent.
+Some training pipelines are stochastic. Exact numerical values may vary between runs, while overall performance trends should remain similar.
