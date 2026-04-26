@@ -10,7 +10,7 @@ This repository contains benchmark workflows for variational digital twin modeli
 
 Published article DOI: https://doi.org/10.1016/j.egyai.2026.100756
 
-![Variational Digital Twin loop](VDT-loop.png)
+![Variational Digital Twin loop](VDT-loop.jpg)
 
 ## Environment setup
 
