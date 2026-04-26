@@ -35,7 +35,10 @@ ARTIFACT_PATTERNS = [
     "HTTF/static_training/variational/*/performance_metrics.json",
     # PSML figures
     "PSML/static_training/variational/LSTM_GRU_PSML_*.png",
+    "PSML/rolling_training/variational/PSML_rolling_metrics.png",
     "PSML/psml_viz.png",
+    # HTTF shrinking-trainset summary figure
+    "HTTF/shrinking_trainset/variational/HTTF_shrink_metrics.png",
 ]
 
 
